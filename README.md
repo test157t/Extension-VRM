@@ -10,7 +10,12 @@ Before you begin, ensure you've met the following prerequisites:
 
 2. **Extension Installation**: Install the "VRM" extension from the "Download Extensions & Assets" menu in the Extensions panel (represented by the stacked blocks icon).
 
-3. **Model Folder Placement**: Place your VRM model files (.vrm) into the `/data/<user-handle>/assets/vrm/model` directory and your animation files into the `/data/<user-handle>/assets/vrm/animation` directory. The currently supported animation file format are .fbx and .bvh that are compatible with VRM models. This include any animation you can get from Mixamo (https://www.mixamo.com/) and any animation you can export from tools like XR Animator (https://github.com/ButzYung/SystemAnimatorOnline).
+3. **Model Folder Placement**: Place your VRM model files (.vrm) into the `/data/<user-handle>/assets/vrm/model` directory and your animation files into the `/data/<user-handle>/assets/vrm/animation` directory. The currently supported animation file formats are .fbx, .bvh, and .vrma (VRM Animation) that are compatible with VRM models. This includes any animation you can get from Mixamo (https://www.mixamo.com/), any animation you can export from tools like XR Animator (https://github.com/ButzYung/SystemAnimatorOnline), and native VRM Animation files.
+## VRMA Animation Support
+
+You can now use `.vrma` animation files (VRM Animation format) directly with the extension. The loader will automatically detect and parse .vrma files using the integrated [@pixiv/three-vrm](https://github.com/pixiv/three-vrm) library, and unify the output with .bvh and .fbx loaders. This allows seamless mixing of animation sources.
+
+To load any animation, use the unified loader function, which will detect the file type and return a consistent `{ skeleton, clip }` result for use with your VRM models.
 
 ## Extension Settings
 
