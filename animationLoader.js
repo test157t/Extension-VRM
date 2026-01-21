@@ -7,9 +7,9 @@ import {
 } from "./constants.js";
 
 export {
-    mixamoVRMRigMap,
-    loadMixamoAnimation,
-    loadBVHAnimation
+	mixamoVRMRigMap,
+	loadMixamoAnimation,
+	loadBVHAnimation
 }
 
 /**

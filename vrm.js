@@ -2,6 +2,7 @@ import * as THREE from './lib/three.module.js';
 import { GLTFLoader } from './lib/jsm/loaders/GLTFLoader.js';
 import { FBXLoader } from './lib/jsm/loaders/FBXLoader.js';
 import { OrbitControls } from './lib/jsm/controls/OrbitControls.js';
+import { VRMALoader } from './lib/jsm/loaders/VRMALoader.js';
 import { VRMLoaderPlugin, VRMUtils } from './lib/three-vrm.module.js';
 import { loadBVHAnimation, loadMixamoAnimation } from './animationLoader.js';
 
@@ -563,6 +564,17 @@ async function loadAnimation(vrm, hipsHeight, motion_file_path) {
         if (motion_file_path.endsWith(".bvh")) {
             //console.debug(DEBUG_PREFIX,"Loading bvh file",motion_file_path);
             clip = await loadBVHAnimation(motion_file_path, vrm, hipsHeight);
+        }
+        else
+        if (motion_file_path.endsWith(".vrma")) {
+            // VRMA (VRM Animation) file
+            const vrmaLoader = new VRMALoader();
+            const result = await vrmaLoader.loadAsync(motion_file_path, vrm);
+            clip = result ? result.clip : null;
+            if (!clip) {
+                toastr.error('Wrong animation file format:'+motion_file_path, DEBUG_PREFIX + ' cannot play animation', { timeOut: 10000, extendedTimeOut: 20000, preventDuplicates: true });
+                return null;
+            }
         }
         else {
             //console.debug(DEBUG_PREFIX,"UNSUPORTED animation file");
