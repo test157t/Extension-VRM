@@ -16,7 +16,9 @@ import {
     camera,
     VRM_CONTAINER_NAME,
     setExpression,
-    setMotion
+    setMotion,
+    setMotionSequence,
+    setCursorPosition
 } from "./vrm.js";
 import { func } from './lib/jsm/nodes/code/FunctionNode.js';
 import { delay } from '../../../utils.js';
@@ -68,13 +70,18 @@ async function hitboxClick(character,hitbox) {
 
     const model_expression = extension_settings.vrm.model_settings[model_path]['hitboxes_mapping'][hitbox]["expression"];
     const model_motion = extension_settings.vrm.model_settings[model_path]['hitboxes_mapping'][hitbox]["motion"];
+    const sequence = extension_settings.vrm.model_settings[model_path]['hitboxes_mapping'][hitbox]["sequence"];
     const message = extension_settings.vrm.model_settings[model_path]['hitboxes_mapping'][hitbox]["message"];
 
     if (model_expression != "none")
         setExpression(character, model_expression);
 
-    if (model_motion != "none")
+    // Play sequence if defined, otherwise play single motion
+    if (sequence && sequence.trim()) {
+        setMotionSequence(character, sequence, { loop: false });
+    } else if (model_motion != "none") {
         setMotion(character, model_motion, false, true, true);
+    }
 
     if (message != '') {
         console.debug(DEBUG_PREFIX,getContext());
@@ -192,6 +199,9 @@ async function pointerDown(event) {
 }
 
 async function pointerMove(event) {
+    if (extension_settings.vrm.follow_cursor) {
+        setCursorPosition(event.clientX, event.clientY);
+    }
     // init
     if (previousMouse === undefined || currentMouse === undefined) {
         previousMouse = new THREE.Vector2();

@@ -18,9 +18,17 @@
                         <input type="checkbox" id="vrm_follow_camera_checkbox" name="vrm_follow_camera_checkbox">
                         <small>Look at camera</small>
                     </label>
+                    <label class="checkbox_label" for="vrm_follow_cursor_checkbox">
+                        <input type="checkbox" id="vrm_follow_cursor_checkbox" name="vrm_follow_cursor_checkbox">
+                        <small>Follow cursor</small>
+                    </label>
                     <label class="checkbox_label" for="vrm_blink_checkbox">
                         <input type="checkbox" id="vrm_blink_checkbox" name="vrm_blink_checkbox">
                         <small>Blink</small>
+                    </label>
+                    <label class="checkbox_label" for="vrm_natural_idle_checkbox">
+                        <input type="checkbox" id="vrm_natural_idle_checkbox" name="vrm_natural_idle_checkbox" checked>
+                        <small>Natural idle movements</small>
                     </label>
                     <label class="checkbox_label" for="vrm_tts_lips_sync_checkbox">
                         <input type="checkbox" id="vrm_tts_lips_sync_checkbox" name="vrm_tts_lips_sync_checkbox">
@@ -55,6 +63,10 @@
                     <label class="checkbox_label" for="vrm_show_grid_checkbox">
                         <input type="checkbox" id="vrm_show_grid_checkbox" name="vrm_show_grid_checkbox">
                         <small>Show grid</small>
+                    </label>
+                    <label class="checkbox_label" for="vrm_function_tools_checkbox">
+                        <input type="checkbox" id="vrm_function_tools_checkbox" name="vrm_function_tools_checkbox">
+                        <small>Enable AI function tools (allows AI to layer animation sequences on top of automatic expressions)</small>
                     </label>
                     <label class="checkbox_label" for="vrm_reload_button">
                         <div id="vrm_reload_button" class="menu_button">
@@ -256,10 +268,54 @@
                             </small>
                         </div>
                     </div>
+                    <div class="vrm-parameter">
+                        <div class="vrm-parameter-title">
+                            Animation Sequences
+                        </div>
+                        <div class="vrm-sequence-div">
+                            <input type="text" id="vrm_sequence_input" placeholder="wave,point,wait:500,idle" style="width: 100%; margin-bottom: 5px; background-color: #000; color: #fff; border: 1px solid #555; padding: 5px;">
+                            <div style="display: flex; gap: 5px;">
+                                <button id="vrm_sequence_play" class="menu_button" style="flex: 1;">
+                                    <i class="fa-solid fa-play"></i> Play
+                                </button>
+                                <button id="vrm_sequence_clear" class="menu_button" style="flex: 1;">
+                                    <i class="fa-solid fa-stop"></i> Stop
+                                </button>
+                                <label class="checkbox_label" style="flex: 1; margin: 0;">
+                                    <input type="checkbox" id="vrm_sequence_loop">
+                                    <small>Loop</small>
+                                </label>
+                            </div>
+                            <small>
+                                Enter animation names separated by commas. Use wait:ms for pauses. Example: wave,point,wait:500,idle
+                            </small>
+                        </div>
+                    </div>
                     <div>
                         <h4>Classified expressions mapping</h4>
                     </div>
                     <div id="vrm_expression_mapping">
+                    </div>
+                    <div>
+                        <h4>Custom Blend Shape Mapping</h4>
+                    </div>
+                    <div id="vrm_blend_shape_mapping">
+                        <div class="vrm-parameter">
+                            <div class="vrm-parameter-title">
+                                <label for="vrm_blend_shape_group_name">
+                                    New Blend Shape Group:
+                                </label>
+                            </div>
+                            <div style="display: flex; gap: 5px; margin-bottom: 10px;">
+                                <input type="text" id="vrm_blend_shape_group_name" placeholder="e.g., smirk, blush, etc." style="flex: 1; background-color: #000; color: #fff; border: 1px solid #555; padding: 5px;">
+                                <button id="vrm_blend_shape_add" class="menu_button">
+                                    <i class="fa-solid fa-plus"></i> Add
+                                </button>
+                            </div>
+                        </div>
+                        <div id="vrm_blend_shape_groups">
+                            <!-- Blend shape groups will be populated here -->
+                        </div>
                     </div>
                 </div>
             </div>

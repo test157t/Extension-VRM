@@ -137,3 +137,36 @@
 .vrm-hidden {
     visibility: hidden;
 }
+
+.vrm-blend-shape-weights {
+    padding: 8px;
+    background-color: #1a1a1a;
+    border-radius: 4px;
+    margin-top: 5px;
+}
+
+.vrm-blend-shape-weights input[type="range"] {
+    cursor: pointer;
+}
+
+#vrm_blend_shape_groups {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+#vrm_blend_shape_groups .vrm-parameter {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 10px;
+}
+
+#vrm_blend_shape_groups .vrm-parameter-title {
+    width: 100%;
+    padding: 5px 0;
+}
+
+#vrm_blend_shape_groups .vrm-blend-shape-weights {
+    padding: 10px;
+    background-color: #222;
+}

@@ -18,7 +18,8 @@ export {
     HITBOXES,
     HIT_BOX_DELAY,
     DEFAULT_LIGHT_COLOR,
-    DEFAULT_LIGHT_INTENSITY
+    DEFAULT_LIGHT_INTENSITY,
+    DEFAULT_CUSTOM_EXPRESSIONS
 }
 
 const MODULE_NAME = "VRM";
@@ -316,5 +317,68 @@ const HITBOXES = {
             "z":0,
         },
         "color": 0x6600cc
+    }
+}
+
+const DEFAULT_CUSTOM_EXPRESSIONS = {
+    "shy": {
+        blendShapes: {
+            "aa": 0.0,
+            "ih": 0.0,
+            "ou": 0.0,
+            "ee": 0.0,
+            "oh": 0.0
+        },
+        intensity: 0.6
+    },
+    "smirk": {
+        blendShapes: {
+            "aa": 0.0,
+            "ih": 0.0,
+            "ou": 0.0,
+            "ee": 0.0,
+            "oh": 0.0
+        },
+        intensity: 0.7
+    },
+    "blush": {
+        blendShapes: {
+            "aa": 0.0,
+            "ih": 0.0,
+            "ou": 0.0,
+            "ee": 0.0,
+            "oh": 0.0
+        },
+        intensity: 0.5
+    },
+    "wink": {
+        blendShapes: {
+            "aa": 0.0,
+            "ih": 0.0,
+            "ou": 0.0,
+            "ee": 0.0,
+            "oh": 0.0
+        },
+        intensity: 0.8
+    },
+    "pout": {
+        blendShapes: {
+            "aa": 0.0,
+            "ih": 0.0,
+            "ou": 0.0,
+            "ee": 0.0,
+            "oh": 0.0
+        },
+        intensity: 0.6
+    },
+    "cute": {
+        blendShapes: {
+            "aa": 0.0,
+            "ih": 0.0,
+            "ou": 0.0,
+            "ee": 0.0,
+            "oh": 0.0
+        },
+        intensity: 0.5
     }
 }
