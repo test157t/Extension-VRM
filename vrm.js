@@ -2853,25 +2853,8 @@ window.vrmStopLipSync = stopRealtimeLipSync;
 window.vrmLipSyncAudio = async function(blob, character) {
     if (!extension_settings.vrm.tts_lips_sync) return;
     if (!blob || !character) return;
-
-    // Clean up any existing real-time lip sync before starting new one
-    // This prevents conflicts between different TTS providers
-    stopRealtimeLipSync();
-
+    
     await audioTalk(blob, character, { webAudio: false });
-};
-
-// Clean stop for any TTS provider - stops all lip sync and closes mouth
-window.vrmStopAllLipSync = function() {
-    stopRealtimeLipSync();
-    if (currentLipSyncCleanup) {
-        try {
-            currentLipSyncCleanup();
-        } catch (e) {
-            console.debug(DEBUG_PREFIX, "Cleanup error (safe to ignore):", e.message);
-        }
-        currentLipSyncCleanup = null;
-    }
 };
 
 // Perform audio lip sync
@@ -2895,17 +2878,12 @@ async function audioTalk(blob, character, options = {}) {
     // For Web Audio mode: use real-time lip sync from VoiceForge's shared analyser
     // Much simpler and more reliable than per-chunk analysis
     if (useWebAudio) {
-        // Always stop any existing real-time lip sync before starting new one
-        stopRealtimeLipSync();
         startRealtimeLipSync(character);
         return; // Real-time mode handles everything via animation loop
     }
     
     // Audio element mode: use legacy per-blob analysis
     if (currentLipSyncCleanup) {
-        // Always stop real-time lip sync first to prevent conflicts
-        stopRealtimeLipSync();
-
         try {
             currentLipSyncCleanup();
         } catch (e) {
@@ -3034,9 +3012,6 @@ async function audioTalk(blob, character, options = {}) {
         
         // Only reset mouth visemes in audio element mode (single audio)
         // In Web Audio mode, another chunk might still be playing - don't reset
-        // Always stop real-time lip sync to prevent conflicts
-        stopRealtimeLipSync();
-
         if (!useWebAudio && current_avatars[character] !== undefined) {
             const expressionMgr = current_avatars[character]["vrm"].expressionManager;
             expressionMgr.setValue("aa", 0);
@@ -3116,47 +3091,37 @@ async function audioTalk(blob, character, options = {}) {
         var array = new Uint8Array(analyser.frequencyBinCount);
         analyser.getByteFrequencyData(array);
 
-        // Formant-based frequency band analysis (same as real-time mode)
-        // Based on typical speech formant frequencies:
-        // - F1 (300-800Hz): Mouth openness
-        // - F2 (800-2500Hz): Front/back tongue position (ee vs ou)
+        // Frequency band analysis for viseme selection
+        // Split spectrum into bands for different mouth shapes
         const binCount = array.length;
-        const sampleRate = audioContext.sampleRate || 48000;
-        const binHz = sampleRate / (binCount * 2);
+        const lowEnd = Math.floor(binCount * 0.15);   // 0-15% = low frequencies (oh/ou)
+        const midEnd = Math.floor(binCount * 0.4);    // 15-40% = mid frequencies (aa)
+        const highEnd = Math.floor(binCount * 0.7);   // 40-70% = high frequencies (ee/ih)
 
-        const veryLowEnd = Math.floor(400 / binHz);
-        const lowEnd = Math.floor(800 / binHz);
-        const midEnd = Math.floor(1500 / binHz);
-        const highEnd = Math.floor(2500 / binHz);
-
-        let veryLowSum = 0, lowSum = 0, midSum = 0, highSum = 0, totalSum = 0;
-        for (let i = 0; i < Math.min(binCount, highEnd + 50); i++) {
-            const val = array[i];
-            totalSum += val;
-            if (i < veryLowEnd) veryLowSum += val;
-            else if (i < lowEnd) lowSum += val;
-            else if (i < midEnd) midSum += val;
-            else if (i < highEnd) highSum += val;
+        let lowSum = 0, midSum = 0, highSum = 0, totalSum = 0;
+        for (let i = 0; i < binCount; i++) {
+            totalSum += array[i];
+            if (i < lowEnd) lowSum += array[i];
+            else if (i < midEnd) midSum += array[i];
+            else if (i < highEnd) highSum += array[i];
         }
 
-        const veryLowAvg = veryLowSum / Math.max(1, veryLowEnd);
-        const lowAvg = lowSum / Math.max(1, lowEnd - veryLowEnd);
-        const midAvg = midSum / Math.max(1, midEnd - lowEnd);
-        const highAvg = highSum / Math.max(1, highEnd - midEnd);
-        const totalAvg = totalSum / Math.max(1, Math.min(binCount, highEnd + 50));
-        const inputVolume = totalAvg;
+        // Normalize by band size
+        const lowAvg = lowSum / lowEnd;
+        const midAvg = midSum / (midEnd - lowEnd);
+        const highAvg = highSum / (highEnd - midEnd);
+        const totalAvg = totalSum / binCount;
 
-        // Use same thresholds as real-time mode for consistency
-        const voweldamp = 35;
-        const vowelmin = 10;
-        const mouththreshold = 8;
-        const mouthboost = 15;
-        
+        var inputvolume = totalAvg * (audioContext.sampleRate / 48000); // Normalize threshold
+
+        var voweldamp = 42;     // Lower = bigger movements (default 53)
+        var vowelmin = 10;      // Lower = responds to quieter audio (default 12)
+
         if(lastUpdate < (Date.now() - LIPS_SYNC_DELAY)) {
             if (current_avatars[character] !== undefined) {
                 const expressionMgr = current_avatars[character]["vrm"].expressionManager;
 
-                if (inputVolume > (mouththreshold * 2)) {
+                if (inputvolume > (mouththreshold * 2)) {
                     // Neutralize other expressions only when we have audio to animate
                     for(const expression in expressionMgr.expressionMap) {
                         if (!['aa', 'ee', 'ih', 'oh', 'ou'].includes(expression)) {
@@ -3164,35 +3129,29 @@ async function audioTalk(blob, character, options = {}) {
                         }
                     }
 
-                    // Calculate base mouth opening from F1 region (overall energy)
+                    // Calculate base mouth opening
                     const baseOpen = Math.min(1.0, ((totalAvg - vowelmin) / voweldamp) * (mouthboost / 10));
 
-                    if (lowAvg > vowelmin && midAvg > vowelmin && highAvg > vowelmin) {
-                        // All bands present - full vowel blending
-                        const ohValue = baseOpen * 1.2;
-                        const ouValue = baseOpen * 0.8;
-                        const aaValue = baseOpen * 1.5;
-                        const eeValue = baseOpen * 0.9;
-                        const ihValue = baseOpen * 0.6;
+                    // Determine dominant frequency band for viseme selection
+                    const maxBand = Math.max(lowAvg, midAvg, highAvg);
 
-                        expressionMgr.setValue("oh", Math.min(1.0, ohValue));
-                        expressionMgr.setValue("ou", Math.min(1.0, ouValue));
-                        expressionMgr.setValue("aa", Math.min(1.0, aaValue));
-                        expressionMgr.setValue("ee", Math.min(1.0, eeValue));
-                        expressionMgr.setValue("ih", Math.min(1.0, ihValue));
-                    } else {
-                        // Frequency-specific visemes based on dominant formant
-                        const maxBand = Math.max(lowAvg, midAvg, highAvg);
+                    if (maxBand > vowelmin) {
+                        // Blend visemes based on frequency distribution
                         const lowWeight = lowAvg / (lowAvg + midAvg + highAvg + 0.1);
                         const midWeight = midAvg / (lowAvg + midAvg + highAvg + 0.1);
                         const highWeight = highAvg / (lowAvg + midAvg + highAvg + 0.1);
 
+                        // Low frequencies = rounder mouth shapes (oh, ou)
+                        // Mid frequencies = open mouth (aa)
+                        // High frequencies = spread lips (ee, ih)
+
                         const ohValue = baseOpen * lowWeight * 1.2;
                         const ouValue = baseOpen * lowWeight * 0.8;
-                        const aaValue = baseOpen * midWeight * 1.5;
+                        const aaValue = baseOpen * midWeight * 1.5;  // aa is primary
                         const eeValue = baseOpen * highWeight * 0.9;
                         const ihValue = baseOpen * highWeight * 0.6;
 
+                        // Set all mouth visemes
                         expressionMgr.setValue("oh", Math.min(1.0, ohValue));
                         expressionMgr.setValue("ou", Math.min(1.0, ouValue));
                         expressionMgr.setValue("aa", Math.min(1.0, aaValue));
@@ -3208,7 +3167,7 @@ async function audioTalk(blob, character, options = {}) {
                     const currentIh = expressionMgr.getValue("ih") || 0;
                     const currentOh = expressionMgr.getValue("oh") || 0;
                     const currentOu = expressionMgr.getValue("ou") || 0;
-                    
+
                     // Apply decay - mouth smoothly closes
                     expressionMgr.setValue("aa", currentAa * MOUTH_DECAY);
                     expressionMgr.setValue("ee", currentEe * MOUTH_DECAY);
@@ -3225,7 +3184,7 @@ async function audioTalk(blob, character, options = {}) {
         // Web Audio mode: start immediately (VoiceForge handles actual playback timing)
         // The audio analysis runs in parallel with VoiceForge's scheduled playback
         startTalk();
-        
+
         // Set up auto-end based on duration
         setupAudio().then(() => {
             if (audioDuration > 0 && !endTalkCalled) {
@@ -3242,7 +3201,7 @@ async function audioTalk(blob, character, options = {}) {
         audio.addEventListener("play", startTalk, { once: true });
         audio.addEventListener("ended", endTalk, { once: true });
     }
-    
+
     // TODO: restaure expression weight ?
 }
 
