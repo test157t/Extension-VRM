@@ -135,6 +135,8 @@ const UPDATE_INTERVAL = 100;
 const extensionFolderPath = `scripts/extensions/third-party/Extension-VRM`;
 
 //#############################//
+
+//#############################//
 //  Extension UI and Settings  //
 //#############################//
 
