@@ -2853,8 +2853,25 @@ window.vrmStopLipSync = stopRealtimeLipSync;
 window.vrmLipSyncAudio = async function(blob, character) {
     if (!extension_settings.vrm.tts_lips_sync) return;
     if (!blob || !character) return;
-    
+
+    // Clean up any existing real-time lip sync before starting new one
+    // This prevents conflicts between different TTS providers
+    stopRealtimeLipSync();
+
     await audioTalk(blob, character, { webAudio: false });
+};
+
+// Clean stop for any TTS provider - stops all lip sync and closes mouth
+window.vrmStopAllLipSync = function() {
+    stopRealtimeLipSync();
+    if (currentLipSyncCleanup) {
+        try {
+            currentLipSyncCleanup();
+        } catch (e) {
+            console.debug(DEBUG_PREFIX, "Cleanup error (safe to ignore):", e.message);
+        }
+        currentLipSyncCleanup = null;
+    }
 };
 
 // Perform audio lip sync
@@ -2878,12 +2895,17 @@ async function audioTalk(blob, character, options = {}) {
     // For Web Audio mode: use real-time lip sync from VoiceForge's shared analyser
     // Much simpler and more reliable than per-chunk analysis
     if (useWebAudio) {
+        // Always stop any existing real-time lip sync before starting new one
+        stopRealtimeLipSync();
         startRealtimeLipSync(character);
         return; // Real-time mode handles everything via animation loop
     }
     
     // Audio element mode: use legacy per-blob analysis
     if (currentLipSyncCleanup) {
+        // Always stop real-time lip sync first to prevent conflicts
+        stopRealtimeLipSync();
+
         try {
             currentLipSyncCleanup();
         } catch (e) {
@@ -3012,6 +3034,9 @@ async function audioTalk(blob, character, options = {}) {
         
         // Only reset mouth visemes in audio element mode (single audio)
         // In Web Audio mode, another chunk might still be playing - don't reset
+        // Always stop real-time lip sync to prevent conflicts
+        stopRealtimeLipSync();
+
         if (!useWebAudio && current_avatars[character] !== undefined) {
             const expressionMgr = current_avatars[character]["vrm"].expressionManager;
             expressionMgr.setValue("aa", 0);
