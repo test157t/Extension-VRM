@@ -1291,7 +1291,7 @@ function updateCursorTracking() {
   const raycaster = new THREE.Raycaster();
   raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
   
-  const distance = 1.0;
+   const distance = 5.0;  // Far enough for natural eye movement range
   const targetPos = new THREE.Vector3();
   targetPos.copy(camera.position).add(raycaster.ray.direction.multiplyScalar(distance));
   
@@ -1301,8 +1301,6 @@ function updateCursorTracking() {
 function applyCursorTiltAndShift(vrm, character) {
   if (!cursorTiltState[character]) {
     const upperChest = vrm.humanoid?.getNormalizedBoneNode("upperChest");
-    const leftEye = vrm.humanoid?.getNormalizedBoneNode("leftEye");
-    const rightEye = vrm.humanoid?.getNormalizedBoneNode("rightEye");
     const objectContainer = current_avatars[character]?.["objectContainer"];
     
     if (upperChest && objectContainer) {
@@ -1313,13 +1311,6 @@ function applyCursorTiltAndShift(vrm, character) {
         currentYaw: 0,
         targetPitch: 0,
         currentPitch: 0,
-        // Eye tracking state
-        leftEyeBase: leftEye?.quaternion.clone(),
-        rightEyeBase: rightEye?.quaternion.clone(),
-        eyeYaw: 0,
-        eyePitch: 0,
-        targetEyeYaw: 0,
-        targetEyePitch: 0,
         // Model Y rotation state
         modelBaseRotation: objectContainer.rotation.y,
         modelTargetYaw: 0,
@@ -1334,8 +1325,6 @@ function applyCursorTiltAndShift(vrm, character) {
   
   const state = cursorTiltState[character];
   const upperChest = vrm.humanoid?.getNormalizedBoneNode("upperChest");
-  const leftEye = vrm.humanoid?.getNormalizedBoneNode("leftEye");
-  const rightEye = vrm.humanoid?.getNormalizedBoneNode("rightEye");
   const objectContainer = current_avatars[character]?.["objectContainer"];
   
   if (!state || !upperChest || !objectContainer) return;
@@ -1343,74 +1332,65 @@ function applyCursorTiltAndShift(vrm, character) {
   const cursorX = (cursorPosition.x / window.innerWidth) * 2 - 1;
   const cursorY = -(cursorPosition.y / window.innerHeight) * 2 + 1;
   
-  // HIERARCHY: Eyes > Head > Neck > Upper Body > Lower Body
-  // Each level moves less than the one above it
-  
-  // MODEL Y ROTATION (Lower body horizontal) - Least movement
-  // Only rotates when looking far to the side
-  state.modelTargetYaw = cursorX * 0.12;  // ~7 degrees max
-  state.modelCurrentYaw += (state.modelTargetYaw - state.modelCurrentYaw) * 0.03;
-  objectContainer.rotation.y = state.modelBaseRotation + state.modelCurrentYaw;
-  
-  // MODEL X ROTATION (Lower body pitch) - Most subtle
-  // Slight forward/back lean when looking up/down
-  state.modelTargetPitch = cursorY * 0.04;  // ~2.3 degrees max (very subtle)
-  state.modelCurrentPitch += (state.modelTargetPitch - state.modelCurrentPitch) * 0.025;
-  objectContainer.rotation.x = state.modelBaseRotationX + state.modelCurrentPitch;
-  
-  // UPPER CHEST - Very subtle, just adds to the pose
-  state.targetYaw = cursorX * 0.06;    // ~3.5 degrees
-  state.targetPitch = cursorY * 0.06;  // Forward/back lean
-  
-  // Smooth interpolation
-  state.currentYaw += (state.targetYaw - state.currentYaw) * 0.05;
-  state.currentPitch += (state.targetPitch - state.currentPitch) * 0.05;
-  
-  // Apply as Euler rotation
-  const targetEuler = new THREE.Euler(
-    state.currentPitch,
-    state.currentYaw,
-    -state.currentYaw * 0.15
-  );
-  const targetQuat = new THREE.Quaternion().setFromEuler(targetEuler);
-  
-  upperChest.quaternion.slerp(state.baseRotation.clone().multiply(targetQuat), 0.08);
-  
-  // INDEPENDENT EYE TRACKING - Most movement
-  // Eyes can look much further than head for expressive tracking
-  const maxEyeYaw = 0.52;    // ~30 degrees (was 0.35 = 20deg)
-  const maxEyePitch = 0.35;  // ~20 degrees (was 0.25 = 14deg)
-  
-  // Calculate where eyes should look (most responsive)
-  // Eyes move more than head to track cursor
-  state.targetEyeYaw = Math.max(-maxEyeYaw, Math.min(maxEyeYaw, cursorX * 0.65));
-  state.targetEyePitch = Math.max(-maxEyePitch, Math.min(maxEyePitch, -cursorY * 0.55));
-  
-  // Smooth eye movement (faster than head, but still smooth)
-  state.eyeYaw += (state.targetEyeYaw - state.eyeYaw) * 0.12;
-  state.eyePitch += (state.targetEyePitch - state.eyePitch) * 0.12;
-  
-  // Apply to left eye
-  if (leftEye && state.leftEyeBase) {
-    const leftEyeEuler = new THREE.Euler(
-      state.eyePitch + 0.02,  // Slight offset for convergence
-      state.eyeYaw + 0.03,    // Slight outward angle
-      0
-    );
-    const leftEyeQuat = new THREE.Quaternion().setFromEuler(leftEyeEuler);
-    leftEye.quaternion.slerp(state.leftEyeBase.clone().multiply(leftEyeQuat), 0.15);
-  }
-  
-  // Apply to right eye
-  if (rightEye && state.rightEyeBase) {
-    const rightEyeEuler = new THREE.Euler(
-      state.eyePitch + 0.02,
-      state.eyeYaw - 0.03,    // Slight outward angle (opposite)
-      0
-    );
-    const rightEyeQuat = new THREE.Quaternion().setFromEuler(rightEyeEuler);
-    rightEye.quaternion.slerp(state.rightEyeBase.clone().multiply(rightEyeQuat), 0.15);
-  }
+   // HIERARCHY: Eyes > Head > Neck > Upper Body > Lower Body
+   // Each level moves less than the one above it
+   
+   // MODEL Y ROTATION (Lower body horizontal) - Moderate turn
+   state.modelTargetYaw = cursorX * 0.20;
+   state.modelCurrentYaw += (state.modelTargetYaw - state.modelCurrentYaw) * 0.04;
+   objectContainer.rotation.y = state.modelBaseRotation + state.modelCurrentYaw;
+   
+   // MODEL X ROTATION (Lower body pitch) - Bend forward when looking down
+   state.modelTargetPitch = cursorY * 0.15;
+   state.modelCurrentPitch += (state.modelTargetPitch - state.modelCurrentPitch) * 0.03;
+   objectContainer.rotation.x = state.modelBaseRotationX + state.modelCurrentPitch;
+   
+   // UPPER CHEST - Moderate head/chest tracking
+   state.targetYaw = cursorX * 0.18;
+   state.targetPitch = cursorY * 0.25;
+   
+   // Smooth interpolation
+   state.currentYaw += (state.targetYaw - state.currentYaw) * 0.08;
+   state.currentPitch += (state.targetPitch - state.currentPitch) * 0.08;
+   
+   // Apply as Euler rotation
+   const targetEuler = new THREE.Euler(
+     state.currentPitch,
+     state.currentYaw,
+     -state.currentYaw * 0.15
+   );
+   const targetQuat = new THREE.Quaternion().setFromEuler(targetEuler);
+   
+   upperChest.quaternion.slerp(state.baseRotation.clone().multiply(targetQuat), 0.10);
+   
+   // Neck rotation - add extra movement between chest and head
+   const neck = vrm.humanoid?.getNormalizedBoneNode("neck");
+   if (neck) {
+     const neckTargetYaw = cursorX * 0.25;
+     const neckTargetPitch = cursorY * 0.35;
+     
+     if (!state.neckBaseRotation) {
+       state.neckBaseRotation = neck.quaternion.clone();
+     }
+     
+     if (state.neckCurrentYaw === undefined) {
+       state.neckCurrentYaw = 0;
+       state.neckCurrentPitch = 0;
+     }
+     
+     state.neckCurrentYaw += (neckTargetYaw - state.neckCurrentYaw) * 0.12;
+     state.neckCurrentPitch += (neckTargetPitch - state.neckCurrentPitch) * 0.12;
+     
+     const neckEuler = new THREE.Euler(
+       state.neckCurrentPitch,
+       state.neckCurrentYaw,
+       -state.neckCurrentYaw * 0.1
+     );
+     const neckQuat = new THREE.Quaternion().setFromEuler(neckEuler);
+     neck.quaternion.slerp(state.neckBaseRotation.clone().multiply(neckQuat), 0.12);
+   }
+   
+   // Eyes are handled by VRM's built-in lookAt.target - no manual bone manipulation
 }
 
 function resetCursorTilt(vrm, character) {
@@ -1418,8 +1398,6 @@ function resetCursorTilt(vrm, character) {
   
   const state = cursorTiltState[character];
   const upperChest = vrm.humanoid?.getNormalizedBoneNode("upperChest");
-  const leftEye = vrm.humanoid?.getNormalizedBoneNode("leftEye");
-  const rightEye = vrm.humanoid?.getNormalizedBoneNode("rightEye");
   const objectContainer = current_avatars[character]?.["objectContainer"];
   
   let allReset = true;
@@ -1427,32 +1405,28 @@ function resetCursorTilt(vrm, character) {
   // Reset model Y rotation
   if (objectContainer) {
     const currentYaw = objectContainer.rotation.y - state.modelBaseRotation;
-    objectContainer.rotation.y += (state.modelBaseRotation - objectContainer.rotation.y) * 0.05;
+    objectContainer.rotation.y += (state.modelBaseRotation - objectContainer.rotation.y) * 0.03;
     if (Math.abs(currentYaw) > 0.001) allReset = false;
     
     // Reset model X rotation
     const currentPitch = objectContainer.rotation.x - state.modelBaseRotationX;
-    objectContainer.rotation.x += (state.modelBaseRotationX - objectContainer.rotation.x) * 0.04;
+    objectContainer.rotation.x += (state.modelBaseRotationX - objectContainer.rotation.x) * 0.02;
     if (Math.abs(currentPitch) > 0.001) allReset = false;
   }
   
-  if (upperChest) {
-    upperChest.quaternion.slerp(state.baseRotation, 0.05);
+   if (upperChest) {
+    upperChest.quaternion.slerp(state.baseRotation, 0.04);
     if (upperChest.quaternion.angleTo(state.baseRotation) > 0.001) allReset = false;
   }
   
-  // Reset eyes
-  if (leftEye && state.leftEyeBase) {
-    leftEye.quaternion.slerp(state.leftEyeBase, 0.08);
-    if (leftEye.quaternion.angleTo(state.leftEyeBase) > 0.001) allReset = false;
+  // Reset neck
+  const neck = vrm.humanoid?.getNormalizedBoneNode("neck");
+  if (neck && state.neckBaseRotation) {
+    neck.quaternion.slerp(state.neckBaseRotation, 0.04);
+    if (neck.quaternion.angleTo(state.neckBaseRotation) > 0.001) allReset = false;
   }
-  
-  if (rightEye && state.rightEyeBase) {
-    rightEye.quaternion.slerp(state.rightEyeBase, 0.08);
-    if (rightEye.quaternion.angleTo(state.rightEyeBase) > 0.001) allReset = false;
-  }
-  
-  if (allReset) {
+   
+   if (allReset) {
     delete cursorTiltState[character];
   }
 }
@@ -1473,14 +1447,15 @@ function animate() {
             
             if (extension_settings.vrm.follow_camera) {
               if (cursorTrackingEnabled && extension_settings.vrm.follow_cursor) {
-                blendedTarget.position.lerpVectors(lookAtTarget.position, cursorTarget.position, 0.75);
-                vrm.lookAt.target = blendedTarget;
+                // Use VRM's native lookAt for eyes, custom code for body/head
+                vrm.lookAt.target = cursorTarget;
                 applyCursorTiltAndShift(vrm, character);
               } else {
                 vrm.lookAt.target = lookAtTarget;
                 resetCursorTilt(vrm, character);
               }
             } else if (cursorTrackingEnabled && extension_settings.vrm.follow_cursor) {
+              // Use VRM's native lookAt for eyes, custom code for body/head
               vrm.lookAt.target = cursorTarget;
               applyCursorTiltAndShift(vrm, character);
             } else {
@@ -2224,6 +2199,14 @@ async function playNextInSequence(character) {
 
     // Resolve animation file path
     let animationFile = item.animation;
+
+    // Handle 'none' animation - skip to next item after wait
+    if (animationFile === 'none') {
+        console.debug(DEBUG_PREFIX, "Skipping 'none' animation for", character);
+        setTimeout(() => playNextInSequence(character), item.wait || 0);
+        return;
+    }
+
     if (!animationFile.includes('.')) {
         // Try to find matching animation file
         const fuse = new Fuse(animations_files);
