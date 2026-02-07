@@ -101,6 +101,9 @@ const activeIdleAnimations = {}; // Track active procedural idle animations
 // Store base bone poses to restore after VRMA animations
 const vrmaBoneBasePoses = {};
 
+// Store base Y position to restore after VRMA animations (prevents height drop)
+const vrmaBaseYPosition = {};
+
 // Track last idle animation completion time for cooldown
 const lastIdleCompletionTime = {};
 
@@ -500,7 +503,7 @@ const NATURAL_MOVEMENTS = {
       if (Math.random() > 0.7) {
         const winkEye = direction > 0 ? 'blinkLeft' : 'blinkRight';
         setTimeout(() => {
-          applyIdleExpression(vrm, character, winkEye, 0.8, 1500);
+          applyIdleExpression(vrm, character, winkEye, 0.9, 1500);
         }, 1000);
       }
       // 40% chance for curious smile
@@ -1065,7 +1068,7 @@ const NATURAL_MOVEMENTS = {
 
       // 70% chance for shy or cute expression
       const expression = Math.random() > 0.3 ? 'relaxed' : 'shy';
-      setTimeout(() => applyIdleExpression(vrm, character, expression, 0.65, 2500), 1200);
+      setTimeout(() => applyIdleExpression(vrm, character, expression, 1.0, 2500), 1200);
     }
   },
   chestLift: {
@@ -1114,7 +1117,7 @@ const NATURAL_MOVEMENTS = {
       // 60% chance for confident or proud expression
       if (Math.random() > 0.4) {
         const expression = Math.random() > 0.5 ? 'happy' : 'relaxed';
-        setTimeout(() => applyIdleExpression(vrm, character, expression, 0.65, 2000), 1800);
+        setTimeout(() => applyIdleExpression(vrm, character, expression, 1.0, 2000), 1800);
       }
     }
   },
@@ -1199,35 +1202,47 @@ function applyCursorTiltAndShift(vrm, character) {
   // Smooth interpolation towards target with limits to prevent drift
   state.currentYaw += (targetYaw - state.currentYaw) * 0.08;
   state.currentPitch += (targetPitch - state.currentPitch) * 0.08;
-  
+
   // Clamp cursor offsets to prevent excessive accumulation
   state.currentYaw = Math.max(-0.4, Math.min(0.4, state.currentYaw));
   state.currentPitch = Math.max(-0.5, Math.min(0.5, state.currentPitch));
 
-  // Apply cursor rotation relative to base pose (not additively)
-  const baseChestQuat = cursorBasePoses[character]?.["upperChest"] || upperChest.quaternion.clone();
+  // Apply cursor rotation - get fresh base pose each frame to prevent accumulation
+  const currentChestQuat = upperChest.quaternion.clone();
   const cursorEuler = new THREE.Euler(state.currentPitch, state.currentYaw, -state.currentYaw * 0.15);
   const cursorQuat = new THREE.Quaternion().setFromEuler(cursorEuler);
-  upperChest.quaternion.copy(baseChestQuat).multiply(cursorQuat);
+  
+  // If we have a base pose, apply relative to it, otherwise use current
+  if (cursorBasePoses[character]?.["upperChest"]) {
+    upperChest.quaternion.copy(cursorBasePoses[character]["upperChest"]).multiply(cursorQuat);
+  } else {
+    // Fallback: apply small delta only
+    upperChest.quaternion.multiply(cursorQuat);
+  }
 
   // Neck rotation - add extra movement between chest and head
   const neck = vrm.humanoid?.getNormalizedBoneNode("neck");
   if (neck) {
     const neckTargetYaw = cursorX * 0.25;
-    const neckTargetPitch = cursorY * 0.08;
+    const neckTargetPitch = cursorY * 0.04;
 
     state.neckCurrentYaw += (neckTargetYaw - state.neckCurrentYaw) * 0.12;
     state.neckCurrentPitch += (neckTargetPitch - state.neckCurrentPitch) * 0.12;
-    
+
     // Clamp neck offsets to prevent excessive accumulation
     state.neckCurrentYaw = Math.max(-0.6, Math.min(0.6, state.neckCurrentYaw));
     state.neckCurrentPitch = Math.max(-0.7, Math.min(0.7, state.neckCurrentPitch));
 
-    // Apply cursor rotation relative to base pose
-    const baseNeckQuat = cursorBasePoses[character]?.["neck"] || neck.quaternion.clone();
+    // Apply cursor rotation - get fresh base pose each frame to prevent accumulation
     const neckCursorEuler = new THREE.Euler(state.neckCurrentPitch, state.neckCurrentYaw, -state.neckCurrentYaw * 0.1);
     const neckCursorQuat = new THREE.Quaternion().setFromEuler(neckCursorEuler);
-    neck.quaternion.copy(baseNeckQuat).multiply(neckCursorQuat);
+    
+    if (cursorBasePoses[character]?.["neck"]) {
+      neck.quaternion.copy(cursorBasePoses[character]["neck"]).multiply(neckCursorQuat);
+    } else {
+      // Fallback: apply small delta only
+      neck.quaternion.multiply(neckCursorQuat);
+    }
   }
 
   // Eyes are handled by VRM's built-in lookAt.target - no manual bone manipulation
@@ -1261,61 +1276,35 @@ function resetCursorTilt(vrm, character) {
   // Upper chest - return to base pose
   const upperChest = vrm.humanoid?.getNormalizedBoneNode("upperChest");
   if (upperChest) {
-    state.currentYaw *= 0.96;
-    state.currentPitch *= 0.96;
+    // Hard reset to zero offset immediately
+    state.currentYaw = 0;
+    state.currentPitch = 0;
 
-    // Return to base pose
+    // Return to base pose directly
     const baseChestQuat = cursorBasePoses[character]?.["upperChest"];
     if (baseChestQuat) {
-      const cursorEuler = new THREE.Euler(state.currentPitch, state.currentYaw, -state.currentYaw * 0.15);
-      const cursorQuat = new THREE.Quaternion().setFromEuler(cursorEuler);
-      upperChest.quaternion.copy(baseChestQuat).multiply(cursorQuat);
-    } else {
-      // Fallback if no base pose stored
-      const yawDelta = -state.currentYaw * 0.04;
-      const pitchDelta = -state.currentPitch * 0.04;
-      const deltaEuler = new THREE.Euler(pitchDelta, yawDelta, -yawDelta * 0.15);
-      const deltaQuat = new THREE.Quaternion().setFromEuler(deltaEuler);
-      upperChest.quaternion.multiply(deltaQuat);
-    }
-
-    if (Math.abs(state.currentYaw) > 0.001 || Math.abs(state.currentPitch) > 0.001) {
-      allReset = false;
+      upperChest.quaternion.copy(baseChestQuat);
     }
   }
 
   // Neck - return to base pose
   const neck = vrm.humanoid?.getNormalizedBoneNode("neck");
   if (neck) {
-    state.neckCurrentYaw *= 0.96;
-    state.neckCurrentPitch *= 0.96;
+    // Hard reset to zero offset immediately
+    state.neckCurrentYaw = 0;
+    state.neckCurrentPitch = 0;
 
-    // Return to base pose
+    // Return to base pose directly
     const baseNeckQuat = cursorBasePoses[character]?.["neck"];
     if (baseNeckQuat) {
-      const neckCursorEuler = new THREE.Euler(state.neckCurrentPitch, state.neckCurrentYaw, -state.neckCurrentYaw * 0.1);
-      const neckCursorQuat = new THREE.Quaternion().setFromEuler(neckCursorEuler);
-      neck.quaternion.copy(baseNeckQuat).multiply(neckCursorQuat);
-    } else {
-      // Fallback if no base pose stored
-      const neckYawDelta = -state.neckCurrentYaw * 0.04;
-      const neckPitchDelta = -state.neckCurrentPitch * 0.04;
-      const neckDeltaEuler = new THREE.Euler(neckPitchDelta, neckYawDelta, -neckYawDelta * 0.1);
-      const neckDeltaQuat = new THREE.Quaternion().setFromEuler(neckDeltaEuler);
-      neck.quaternion.multiply(neckDeltaQuat);
-    }
-
-    if (Math.abs(state.neckCurrentYaw) > 0.001 || Math.abs(state.neckCurrentPitch) > 0.001) {
-      allReset = false;
+      neck.quaternion.copy(baseNeckQuat);
     }
   }
 
-  if (allReset) {
-    delete cursorTiltState[character];
-    // Clear base poses when fully reset
-    if (cursorBasePoses[character]) {
-      delete cursorBasePoses[character];
-    }
+  // Always clear state and base poses on reset to prevent accumulation
+  delete cursorTiltState[character];
+  if (cursorBasePoses[character]) {
+    delete cursorBasePoses[character];
   }
 }
 
@@ -1568,6 +1557,11 @@ async function unloadModel(character) {
   // Clear VRMA base poses for this character
   if (vrmaBoneBasePoses[character]) {
     delete vrmaBoneBasePoses[character];
+  }
+
+  // Clear VRMA base Y position for this character
+  if (vrmaBaseYPosition[character]) {
+    delete vrmaBaseYPosition[character];
   }
 
   // Clear idle completion time for this character
@@ -2585,8 +2579,8 @@ async function naturalIdleMovement(character, modelId) {
     console.debug(DEBUG_PREFIX, "Fade out previous idle animation");
   }
 
-  // For VRMA files, store base bone poses before playing
-  // This prevents accumulation of bone rotations over multiple VRMA plays
+  // For VRMA files, store base bone poses and Y position before playing
+  // This prevents accumulation of bone rotations and height drops over multiple VRMA plays
   if (isVRMA) {
     vrmaBoneBasePoses[character] = {};
     const bonesToTrack = ['hips', 'spine', 'upperChest', 'chest', 'neck', 'head'];
@@ -2595,6 +2589,12 @@ async function naturalIdleMovement(character, modelId) {
       if (bone) {
         vrmaBoneBasePoses[character][boneName] = bone.quaternion.clone();
       }
+    }
+    // Store the base Y position to prevent height drop
+    const objectContainer = current_avatars[character]?.["objectContainer"];
+    if (objectContainer) {
+      vrmaBaseYPosition[character] = objectContainer.position.y;
+      console.debug(DEBUG_PREFIX, "Stored base Y position:", vrmaBaseYPosition[character], "for VRMA animation");
     }
   }
 
@@ -2633,7 +2633,7 @@ async function naturalIdleMovement(character, modelId) {
     const delay = Math.random() * 1000 + 500;
     setTimeout(() => {
       if (current_avatars[character]?.vrm === vrm) {
-        applyIdleExpression(vrm, character, randomExpression, 0.5, 2000);
+        applyIdleExpression(vrm, character, randomExpression, 1.0, 2000);
       }
     }, delay);
   }
@@ -2645,7 +2645,7 @@ async function naturalIdleMovement(character, modelId) {
     const delay = Math.random() * 1000 + 500;
     setTimeout(() => {
       if (current_avatars[character]?.vrm === vrm) {
-        applyIdleExpression(vrm, character, randomExpression, 0.5, 2000);
+        applyIdleExpression(vrm, character, randomExpression, 1.0, 2000);
       }
     }, delay);
   }
@@ -2681,6 +2681,16 @@ async function naturalIdleMovement(character, modelId) {
             delete vrmaBoneBasePoses[character];
             console.debug(DEBUG_PREFIX, "Restored base bone poses after VRMA animation");
           }
+          // Restore base Y position to prevent height drop
+          if (vrmaBaseYPosition[character] !== undefined) {
+            const objectContainer = current_avatars[character]?.["objectContainer"];
+            if (objectContainer) {
+              const oldY = objectContainer.position.y;
+              objectContainer.position.y = vrmaBaseYPosition[character];
+              console.debug(DEBUG_PREFIX, "Restored base Y position from", oldY, "to", vrmaBaseYPosition[character], "after VRMA animation");
+            }
+            delete vrmaBaseYPosition[character];
+          }
         }, fadeOutDuration + 100);
         console.debug(DEBUG_PREFIX, "Fading out VRMA idle animation with pose restoration");
       } else {
@@ -2695,22 +2705,15 @@ async function naturalIdleMovement(character, modelId) {
       lastIdleCompletionTime[character] = completionTime;
       console.debug(DEBUG_PREFIX, "Idle animation completed for", character, "at", completionTime, "- starting cooldown");
       
-      // Reset cursor base poses after idle animation completes
-      // This prevents cursor tracking from using stale base poses
-      if (cursorBasePoses[character]) {
-        const vrm = current_avatars[character]?.["vrm"];
-        if (vrm?.humanoid) {
-          const upperChest = vrm.humanoid.getNormalizedBoneNode("upperChest");
-          const neck = vrm.humanoid.getNormalizedBoneNode("neck");
-          if (upperChest) {
-            cursorBasePoses[character]["upperChest"] = upperChest.quaternion.clone();
-          }
-          if (neck) {
-            cursorBasePoses[character]["neck"] = neck.quaternion.clone();
-          }
-          console.debug(DEBUG_PREFIX, "Reset cursor base poses after idle animation for", character);
-        }
+      // Clear cursor tracking state and base poses after idle animation
+      // This prevents accumulation issues when animations change
+      if (cursorTiltState[character]) {
+        delete cursorTiltState[character];
       }
+      if (cursorBasePoses[character]) {
+        delete cursorBasePoses[character];
+      }
+      console.debug(DEBUG_PREFIX, "Cleared cursor tracking state after idle animation for", character);
       
       // Schedule next idle after fade completes (add extra time for VRMA pose restoration)
       const nextDelay = isVRMA ? fadeOutDuration + 200 + pauseAfter : 0;
