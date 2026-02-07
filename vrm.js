@@ -534,6 +534,239 @@ const NATURAL_MOVEMENTS = {
             }
         }
     },
+    lookAround: {
+        type: 'head',
+        duration: 15000,
+        description: 'looking around',
+        action: (vrm, character, modelId) => {
+            // Model rotation that follows to look pattern
+            const modelRotation1 = 0.06;
+            const modelRotation2 = -0.05;
+            
+            setTimeout(() => applyModelRotation(vrm, character, modelId, modelRotation1, 4000), 500);
+            setTimeout(() => applyModelRotation(vrm, character, modelId, modelRotation2, 4000), 6000);
+            
+            // 50% chance for slight smile during look
+            if (Math.random() > 0.5) {
+                setTimeout(() => applyIdleExpression(vrm, character, 'happy', 0.4, 1500), 300);
+            }
+            
+            const directions = [
+                { x: 0.08, y: 0.2, duration: 3000 },
+                { x: 0.03, y: 0.0, duration: 2500 },
+                { x: 0.06, y: -0.18, duration: 3000 },
+                { x: -0.03, y: 0.0, duration: 2500 }
+            ];
+
+            let currentStep = 0;
+            const head = vrm.humanoid?.getNormalizedBoneNode("head");
+            if (!head) return;
+            const baseEuler = new THREE.Euler().setFromQuaternion(head.quaternion.clone());
+
+            function doStep() {
+                if (currentStep >= directions.length ||
+                    current_avatars[character]?.vrm !== vrm ||
+                    current_avatars[character]?.["id"] !== modelId) {
+                    return;
+                }
+
+                const step = directions[currentStep];
+                const startTime = Date.now();
+                const startQuat = head.quaternion.clone();
+                const targetEuler = new THREE.Euler(
+                    baseEuler.x + step.x,
+                    baseEuler.y + step.y,
+                    baseEuler.z
+                );
+                const targetQuat = new THREE.Quaternion().setFromEuler(targetEuler);
+
+                function animateStep() {
+                    if (current_avatars[character]?.vrm !== vrm) return;
+                    const elapsed = Date.now() - startTime;
+                    const progress = Math.min(elapsed / step.duration, 1);
+                    const eased = easeInOutCubic(progress);
+
+                    head.quaternion.slerpQuaternions(startQuat, targetQuat, eased);
+
+                    if (progress < 1) {
+                        requestAnimationFrame(animateStep);
+                    } else {
+                        currentStep++;
+                        if (currentStep < directions.length) {
+                            setTimeout(doStep, 1200);
+                        } else {
+                            const returnStart = Date.now();
+                            const returnDuration = 2500;
+                            const holdQuat = head.quaternion.clone();
+                            const baseQuat = new THREE.Quaternion().setFromEuler(baseEuler);
+
+                            function returnToBase() {
+                                const returnElapsed = Date.now() - returnStart;
+                                const returnProgress = Math.min(returnElapsed / returnDuration, 1);
+                                head.quaternion.slerpQuaternions(holdQuat, baseQuat, easeInOutCubic(returnProgress));
+
+                                if (returnProgress < 1) {
+                                    requestAnimationFrame(returnToBase);
+                                }
+                            }
+                            returnToBase();
+                        }
+                    }
+                }
+
+                animateStep();
+            }
+
+            doStep();
+        }
+    },
+    shoulderShrug: {
+        type: 'body',
+        duration: 6000,
+        description: 'shoulder shrug',
+        action: (vrm, character, modelId) => {
+            const bothShoulders = Math.random() > 0.6;
+            const leftShoulder = vrm.humanoid?.getNormalizedBoneNode("leftShoulder");
+            const rightShoulder = vrm.humanoid?.getNormalizedBoneNode("rightShoulder");
+
+            if (!leftShoulder && !rightShoulder) return;
+
+            const shrugAmount = Math.random() * 0.12 + 0.06;
+            const startTime = Date.now();
+            const baseLeft = leftShoulder?.quaternion.clone();
+            const baseRight = rightShoulder?.quaternion.clone();
+
+            const rampDuration = 2500;
+            const holdDuration = 4000;
+            const totalDuration = rampDuration * 2 + holdDuration;
+
+            function animateShrug() {
+                if (current_avatars[character]?.vrm !== vrm ||
+                    current_avatars[character]?.["id"] !== modelId) {
+                    return;
+                }
+
+                const elapsed = Date.now() - startTime;
+
+                if (elapsed >= totalDuration) {
+                    if (leftShoulder && baseLeft) {
+                        leftShoulder.quaternion.slerp(baseLeft, 0.03);
+                    }
+                    if (rightShoulder && baseRight && bothShoulders) {
+                        rightShoulder.quaternion.slerp(baseRight, 0.03);
+                    }
+
+                    const stillMoving = (leftShoulder && baseLeft && leftShoulder.quaternion.angleTo(baseLeft) > 0.001) ||
+                                       (rightShoulder && baseRight && bothShoulders && rightShoulder.quaternion.angleTo(baseRight) > 0.001);
+
+                    if (stillMoving) {
+                        requestAnimationFrame(animateShrug);
+                    }
+                    return;
+                }
+
+                let amplitude = 0;
+                if (elapsed < rampDuration) {
+                    amplitude = easeInOutCubic(elapsed / rampDuration);
+                } else if (elapsed < rampDuration + holdDuration) {
+                    amplitude = 1;
+                } else {
+                    amplitude = 1 - easeInOutCubic((elapsed - rampDuration - holdDuration) / rampDuration);
+                }
+
+                const shrugEuler = new THREE.Euler(-shrugAmount * amplitude, 0, 0);
+                const shrugQuat = new THREE.Quaternion().setFromEuler(shrugEuler);
+
+                if (leftShoulder && baseLeft) {
+                    const targetQuat = baseLeft.clone().multiply(shrugQuat);
+                    leftShoulder.quaternion.slerp(targetQuat, 0.04);
+                }
+                if (rightShoulder && baseRight && bothShoulders) {
+                    const targetQuat = baseRight.clone().multiply(shrugQuat);
+                    rightShoulder.quaternion.slerp(targetQuat, 0.04);
+                }
+
+                requestAnimationFrame(animateShrug);
+            }
+
+            animateShrug();
+        }
+    },
+    armStretch: {
+        type: 'body',
+        duration: 8000,
+        description: 'arm stretch',
+        action: (vrm, character, modelId) => {
+            const side = Math.random() > 0.5 ? "left" : "right";
+            const upperArm = vrm.humanoid?.getNormalizedBoneNode(`${side}UpperArm`);
+            const lowerArm = vrm.humanoid?.getNormalizedBoneNode(`${side}LowerArm`);
+
+            if (!upperArm) return;
+
+            const startTime = Date.now();
+            const baseUpper = upperArm.quaternion.clone();
+            const baseLower = lowerArm?.quaternion.clone();
+
+            const rampDuration = 3000;
+            const holdDuration = 5000;
+            const totalDuration = rampDuration * 2 + holdDuration;
+
+            function animateStretch() {
+                if (current_avatars[character]?.vrm !== vrm ||
+                    current_avatars[character]?.["id"] !== modelId) {
+                    return;
+                }
+
+                const elapsed = Date.now() - startTime;
+
+                if (elapsed >= totalDuration) {
+                    upperArm.quaternion.slerp(baseUpper, 0.03);
+                    if (lowerArm && baseLower) {
+                        lowerArm.quaternion.slerp(baseLower, 0.03);
+                    }
+
+                    const stillMoving = upperArm.quaternion.angleTo(baseUpper) > 0.001 ||
+                                       (lowerArm && baseLower && lowerArm.quaternion.angleTo(baseLower) > 0.001);
+
+                    if (stillMoving) {
+                        requestAnimationFrame(animateStretch);
+                    }
+                    return;
+                }
+
+                let amplitude = 0;
+                if (elapsed < rampDuration) {
+                    amplitude = easeInOutCubic(elapsed / rampDuration);
+                } else if (elapsed < rampDuration + holdDuration) {
+                    amplitude = 1;
+                } else {
+                    amplitude = 1 - easeInOutCubic((elapsed - rampDuration - holdDuration) / rampDuration);
+                }
+
+                const stretchEuler = new THREE.Euler(
+                    -0.2 * amplitude,
+                    0,
+                    (side === "left" ? 0.25 : -0.25) * amplitude
+                );
+                const stretchQuat = new THREE.Quaternion().setFromEuler(stretchEuler);
+                const targetUpper = baseUpper.clone().multiply(stretchQuat);
+
+                upperArm.quaternion.slerp(targetUpper, 0.04);
+
+                if (lowerArm && baseLower) {
+                    const elbowBend = new THREE.Quaternion().setFromEuler(
+                        new THREE.Euler(-0.12 * amplitude, 0, 0)
+                    );
+                    const targetLower = baseLower.clone().multiply(elbowBend);
+                    lowerArm.quaternion.slerp(targetLower, 0.04);
+                }
+
+                requestAnimationFrame(animateStretch);
+            }
+
+            animateStretch();
+        }
+    },
     weightShift: {
         type: 'body',
         duration: 12000,
@@ -569,6 +802,45 @@ const NATURAL_MOVEMENTS = {
             // 40% chance for thoughtful expression
             if (Math.random() > 0.6) {
                 setTimeout(() => applyIdleExpression(vrm, character, 'neutral', 0.5, 1500), 800);
+            }
+        }
+    },
+    neckStretch: {
+        type: 'neck',
+        duration: 12000,
+        description: 'neck stretch',
+        action: (vrm, character, modelId) => {
+            const directionX = Math.random() > 0.5 ? 1 : -1;
+            const directionY = Math.random() > 0.5 ? 1 : -1;
+
+            const movementConfig = {
+                x: (Math.random() * 0.12 + 0.05) * directionX,
+                y: (Math.random() * 0.15 + 0.05) * directionY,
+                z: (Math.random() * 0.06 - 0.03)
+            };
+            applyNaturalMovementWithSlerp(vrm, "neck", movementConfig, character, modelId);
+            
+            // 40% chance for curious expression
+            if (Math.random() > 0.6) {
+                setTimeout(() => applyIdleExpression(vrm, character, 'surprised', 0.5, 2000), 600);
+            }
+        }
+    },
+    subtleNod: {
+        type: 'head',
+        duration: 9000,
+        description: 'subtle nod',
+        action: (vrm, character, modelId) => {
+            const movementConfig = {
+                x: Math.random() * 0.2 + 0.08,
+                y: 0,
+                z: 0
+            };
+            applyNaturalMovementWithSlerp(vrm, "head", movementConfig, character, modelId);
+            
+            // 70% chance for gentle smile during nod
+            if (Math.random() > 0.3) {
+                setTimeout(() => applyIdleExpression(vrm, character, 'happy', 0.5, 1500), 1000);
             }
         }
     },
@@ -608,6 +880,41 @@ const NATURAL_MOVEMENTS = {
             if (Math.random() > 0.7) {
                 setTimeout(() => applyIdleExpression(vrm, character, 'surprised', 0.6, 2000), 600);
             }
+        }
+    },
+    handFidget: {
+        type: 'hand',
+        duration: 10000,
+        description: 'hand fidget',
+        action: (vrm, character, modelId) => {
+            const side = Math.random() > 0.5 ? "left" : "right";
+            const upperArm = vrm.humanoid?.getNormalizedBoneNode(`${side}UpperArm`);
+            if (!upperArm) return;
+
+            const movementConfig = {
+                x: 0,
+                y: 0,
+                z: (Math.random() * 0.18 + 0.06) * (side === "left" ? 1 : -1)
+            };
+            applyNaturalMovementWithSlerp(vrm, `${side}UpperArm`, movementConfig, character, modelId);
+            
+            // 50% chance for slight smile while fidgeting
+            if (Math.random() > 0.5) {
+                setTimeout(() => applyIdleExpression(vrm, character, 'happy', 0.4, 1500), 1200);
+            }
+        }
+    },
+    subtleNod: {
+        type: 'head',
+        duration: 9000,
+        description: 'subtle nod',
+        action: (vrm, character, modelId) => {
+            const movementConfig = {
+                x: Math.random() * 0.2 + 0.08,
+                y: 0,
+                z: 0
+            };
+            applyNaturalMovementWithSlerp(vrm, "head", movementConfig, character, modelId);
         }
     },
     torsoSway: {
@@ -661,6 +968,68 @@ const NATURAL_MOVEMENTS = {
             const swayAmount = Math.random() * 0.25 + 0.12;
             const direction = Math.random() > 0.5 ? 1 : -1;
             
+            // Model sways with hips (subtle)
+            const modelRotation = direction * (Math.random() * 0.06 + 0.03);
+            applyModelRotation(vrm, character, modelId, modelRotation, 12000);
+            
+            // Hip sway with rotation
+            const hipConfig = {
+                x: (Math.random() * 0.06 - 0.03),
+                y: Math.random() * 0.15,
+                z: swayAmount
+            };
+            applyNaturalMovementWithSlerp(vrm, "hips", hipConfig, character, modelId);
+            
+            // Spine follows with delay
+            const spine = vrm.humanoid?.getNormalizedBoneNode("spine");
+            if (spine) {
+                setTimeout(() => {
+                    const spineConfig = {
+                        x: (Math.random() * 0.04 - 0.02),
+                        y: -(Math.random() * 0.08),
+                        z: -swayAmount * 0.5
+                    };
+                    applyNaturalMovementWithSlerp(vrm, "spine", spineConfig, character, modelId);
+                }, 300);
+            }
+            
+            // 60% chance for pleasant expression
+            if (Math.random() > 0.4) {
+                setTimeout(() => applyIdleExpression(vrm, character, 'happy', 0.45, 2000), 1500);
+            }
+        }
+    },
+    wristRotate: {
+        type: 'wrist',
+        duration: 9000,
+        description: 'wrist rotate',
+        action: (vrm, character, modelId) => {
+            const side = Math.random() > 0.5 ? "left" : "right";
+            const hand = vrm.humanoid?.getNormalizedBoneNode(`${side}Hand`);
+            if (!hand) return;
+
+            const direction = Math.random() > 0.5 ? 1 : -1;
+            const movementConfig = {
+                x: 0,
+                y: 0,
+                z: (Math.random() * 0.2 + 0.08) * direction
+            };
+            applyNaturalMovementWithSlerp(vrm, `${side}Hand`, movementConfig, character, modelId);
+            
+            // 30% chance for curious expression
+            if (Math.random() > 0.7) {
+                setTimeout(() => applyIdleExpression(vrm, character, 'surprised', 0.5, 1800), 1000);
+            }
+        }
+    },
+    feminineHipSway: {
+        type: 'hips',
+        duration: 14000,
+        description: 'feminine hip sway',
+        action: (vrm, character, modelId) => {
+            const swayAmount = Math.random() * 0.25 + 0.12;
+            const direction = Math.random() > 0.5 ? 1 : -1;
+            
             // Model sways with hips
             const modelRotation = direction * (Math.random() * 0.06 + 0.03);
             applyModelRotation(vrm, character, modelId, modelRotation, 12000);
@@ -700,6 +1069,80 @@ const NATURAL_MOVEMENTS = {
             }
         }
     },
+    handToFace: {
+        type: 'hand',
+        duration: 7000,
+        description: 'hand to face',
+        action: (vrm, character, modelId) => {
+            const side = Math.random() > 0.5 ? "left" : "right";
+            const upperArm = vrm.humanoid?.getNormalizedBoneNode(`${side}UpperArm`);
+            const hand = vrm.humanoid?.getNormalizedBoneNode(`${side}Hand`);
+            if (!upperArm) return;
+
+            const startTime = Date.now();
+            const baseUpper = upperArm.quaternion.clone();
+            const baseHand = hand?.quaternion.clone();
+
+            const rampDuration = 2000;
+            const holdDuration = 3000;
+            const totalDuration = rampDuration * 2 + holdDuration;
+
+            function animate() {
+                if (current_avatars[character]?.vrm !== vrm || current_avatars[character]?.["id"] !== modelId) return;
+
+					const elapsed = Date.now() - startTime;
+
+					if (elapsed >= totalDuration) {
+					upperArm.quaternion.slerp(baseUpper, 0.03);
+
+					if (hand && baseHand) {
+					hand.quaternion.slerp(baseHand, 0.03);
+					}
+
+					if (
+					upperArm.quaternion.angleTo(baseUpper) > 0.001 ||
+					(hand && hand.quaternion.angleTo(baseHand) > 0.001)
+					) {
+						requestAnimationFrame(animate);
+					}
+
+					return;
+				}
+
+
+                let amplitude = 0;
+                if (elapsed < rampDuration) {
+                    amplitude = easeInOutCubic(elapsed / rampDuration);
+                } else if (elapsed < rampDuration + holdDuration) {
+                    amplitude = 1;
+                } else {
+                    amplitude = 1 - easeInOutCubic((elapsed - rampDuration - holdDuration) / rampDuration);
+                }
+
+                const toFaceEuler = new THREE.Euler(
+                    side === "left" ? -0.15 * amplitude : 0.15 * amplitude,
+                    0,
+                    -0.18 * amplitude
+                );
+                const toFaceQuat = new THREE.Quaternion().setFromEuler(toFaceEuler);
+                upperArm.quaternion.slerp(baseUpper.clone().multiply(toFaceQuat), 0.04);
+
+                if (hand && baseHand) {
+                    const handRotate = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, -0.25 * amplitude));
+                    hand.quaternion.slerp(baseHand.clone().multiply(handRotate), 0.04);
+                }
+
+                requestAnimationFrame(animate);
+            }
+
+            animate();
+            
+            // 60% chance for thoughtful expression
+            if (Math.random() > 0.4) {
+                setTimeout(() => applyIdleExpression(vrm, character, 'neutral', 0.7, 2000), 1500);
+            }
+        }
+    },
     coyHeadTilt: {
         type: 'head',
         duration: 12000,
@@ -711,6 +1154,126 @@ const NATURAL_MOVEMENTS = {
                 z: -0.22
             };
             applyNaturalMovementWithSlerp(vrm, "head", movementConfig, character, modelId);
+            
+            // 70% chance for shy or cute expression
+            const expression = Math.random() > 0.3 ? 'relaxed' : 'shy';
+            setTimeout(() => applyIdleExpression(vrm, character, expression, 0.6, 2500), 1500);
+        }
+    },
+    chestLift: {
+        type: 'chest',
+        duration: 10000,
+        description: 'chest lift',
+        action: (vrm, character, modelId) => {
+            const upperChest = vrm.humanoid?.getNormalizedBoneNode("upperChest") || vrm.humanoid?.getNormalizedBoneNode("chest");
+            if (!upperChest) return;
+            const boneName = upperChest.name;
+
+            const movementConfig = {
+                x: -0.15,
+                y: 0,
+                z: 0
+            };
+            applyNaturalMovementWithSlerp(vrm, boneName, movementConfig, character, modelId);
+            
+            // 50% chance for confident or proud expression
+            if (Math.random() > 0.5) {
+                const expression = Math.random() > 0.5 ? 'happy' : 'relaxed';
+                setTimeout(() => applyIdleExpression(vrm, character, expression, 0.6, 1800), 2000);
+            }
+        }
+    },
+    shoulderRoll: {
+        type: 'shoulder',
+        duration: 6500,
+        description: 'shoulder roll',
+        action: (vrm, character, modelId) => {
+            const side1 = Math.random() > 0.5 ? "leftShoulder" : "rightShoulder";
+            const side2 = side1 === "leftShoulder" ? "rightShoulder" : "leftShoulder";
+            const shoulder1 = vrm.humanoid?.getNormalizedBoneNode(side1);
+            const shoulder2 = vrm.humanoid?.getNormalizedBoneNode(side2);
+            if (!shoulder1 || !shoulder2) return;
+
+            const startTime = Date.now();
+            const base1 = shoulder1.quaternion.clone();
+            const base2 = shoulder2.quaternion.clone();
+
+            const rampDuration = 2500;
+            const holdDuration = 4000;
+            const totalDuration = rampDuration * 2 + holdDuration;
+
+            function animateRoll() {
+                if (current_avatars[character]?.vrm !== vrm || current_avatars[character]?.["id"] !== modelId) return;
+
+                const elapsed = Date.now() - startTime;
+
+                if (elapsed >= totalDuration) {
+                    shoulder1.quaternion.slerp(base1, 0.03);
+                    shoulder2.quaternion.slerp(base2, 0.03);
+                    if (shoulder1.quaternion.angleTo(base1) > 0.001 ||
+                            shoulder2.quaternion.angleTo(base2) > 0.001) {
+                        requestAnimationFrame(animateRoll);
+                    }
+                    return;
+                }
+
+                // 50% chance for casual or confident expression
+                if (Math.random() > 0.5) {
+                    const expression = Math.random() > 0.5 ? 'relaxed' : 'happy';
+                    setTimeout(() => applyIdleExpression(vrm, character, expression, 0.5, 1800), 1200);
+                }
+
+                let amplitude = 0;
+                if (elapsed < rampDuration) {
+                    amplitude = easeInOutCubic(elapsed / rampDuration);
+                } else if (elapsed < rampDuration + holdDuration) {
+                    amplitude = 1;
+                } else {
+                    amplitude = 1 - easeInOutCubic((elapsed - rampDuration - holdDuration) / rampDuration);
+                }
+
+                const rollEuler1 = new THREE.Euler(0.18 * amplitude, 0, 0);
+                const rollQuat1 = new THREE.Quaternion().setFromEuler(rollEuler1);
+                shoulder1.quaternion.slerp(base1.clone().multiply(rollQuat1), 0.04);
+
+                const rollEuler2 = new THREE.Euler(-0.15 * amplitude, 0, 0);
+                const rollQuat2 = new THREE.Quaternion().setFromEuler(rollEuler2);
+                shoulder2.quaternion.slerp(base2.clone().multiply(rollQuat2), 0.04);
+
+                requestAnimationFrame(animateRoll);
+            }
+
+            animateRoll();
+        }
+    },
+    coyHeadTilt: {
+        type: 'head',
+        duration: 12000,
+        description: 'coy head tilt',
+        action: (vrm, character, modelId) => {
+            const movementConfig = {
+                x: 0.12,
+                y: 0,
+                z: -0.22
+            };
+            applyNaturalMovementWithSlerp(vrm, "head", movementConfig, character, modelId);
+        }
+    },
+    chestLift: {
+        type: 'chest',
+        duration: 10000,
+        description: 'chest lift',
+        action: (vrm, character, modelId) => {
+            const upperChest = vrm.humanoid?.getNormalizedBoneNode("upperChest") || vrm.humanoid?.getNormalizedBoneNode("chest");
+            if (!upperChest) return;
+            const boneName = upperChest.name;
+
+            const movementConfig = {
+                x: -0.15,
+                y: 0,
+                z: 0
+            };
+            applyNaturalMovementWithSlerp(vrm, boneName, movementConfig, character, modelId);
         }
     }
 };
