@@ -1177,12 +1177,20 @@ function applyCursorTiltAndShift(vrm, character) {
   // MODEL Y ROTATION (Lower body horizontal) - Moderate turn
   const targetModelYaw = cursorX * 0.20;
   state.modelCurrentYaw += (targetModelYaw - state.modelCurrentYaw) * 0.04;
+  // Clamp model yaw to prevent drift
+  state.modelCurrentYaw = Math.max(-0.35, Math.min(0.35, state.modelCurrentYaw));
   objectContainer.rotation.y += (targetModelYaw - state.modelCurrentYaw) * 0.04;
+  // Clamp actual rotation
+  objectContainer.rotation.y = Math.max(-0.35, Math.min(0.35, objectContainer.rotation.y));
 
   // MODEL X ROTATION (Lower body pitch) - Bend forward when looking down (reduced)
   const targetModelPitch = cursorY * 0.08;
   state.modelCurrentPitch += (targetModelPitch - state.modelCurrentPitch) * 0.03;
+  // Clamp model pitch to prevent drift
+  state.modelCurrentPitch = Math.max(-0.25, Math.min(0.25, state.modelCurrentPitch));
   objectContainer.rotation.x += (targetModelPitch - state.modelCurrentPitch) * 0.03;
+  // Clamp actual rotation
+  objectContainer.rotation.x = Math.max(-0.25, Math.min(0.25, objectContainer.rotation.x));
 
   // UPPER CHEST - Moderate head/chest tracking (reduced pitch to prevent excessive leaning)
   const targetYaw = cursorX * 0.18;
@@ -2005,17 +2013,39 @@ async function setMotion(character, motion_file_path, loop=false, force=false, r
         new_motion_animation.terminated = false;
         console.debug(DEBUG_PREFIX,"Loading new animation",motion_file_path);
 
-        current_avatars[character]["motion"]["name"] = motion_file_path;
-        current_avatars[character]["motion"]["animation"] = new_motion_animation;
+  current_avatars[character]["motion"]["name"] = motion_file_path;
+  current_avatars[character]["motion"]["animation"] = new_motion_animation;
+  
+  // Restart natural idle if switching to an idle animation
+  const motionNameBase = motion_file_path?.replace(/\.[^/.]+$/, "").replace(/\d+$/, "");
+  const isIdleMotion = IDLE_ANIMS.some(idle => motionNameBase === idle) || motion_file_path === "none";
+  if (isIdleMotion && extension_settings.vrm.natural_idle && loop) {
+    console.debug(DEBUG_PREFIX, "Switched to idle animation, ensuring natural idle is active for", character);
+    // Clear any existing timer and restart
+    if (naturalIdleTimers[character]) {
+      clearTimeout(naturalIdleTimers[character]);
+      delete naturalIdleTimers[character];
+    }
+    const modelId = current_avatars[character]["id"];
+    setTimeout(() => {
+      naturalIdleMovement(character, modelId);
+    }, ANIMATION_FADE_TIME * 2);
+  }
 
-        // Fade out animation after full loop
-        if (!loop) {
-            setTimeout(() => {
-                if (!new_motion_animation.terminated) {
-                    setMotion(character, extension_settings.vrm.model_settings[model_path]["animation_default"]["motion"], true);
-                }
-            }, clip.duration*1000 - ANIMATION_FADE_TIME*1000);
+    // Fade out animation after full loop
+    if (!loop) {
+      setTimeout(() => {
+        if (!new_motion_animation.terminated) {
+          setMotion(character, extension_settings.vrm.model_settings[model_path]["animation_default"]["motion"], true);
+          // Restart natural idle system when returning to idle
+          if (extension_settings.vrm.natural_idle) {
+            const modelId = current_avatars[character]["id"];
+            console.debug(DEBUG_PREFIX, "Animation ended, restarting natural idle for", character);
+            naturalIdleMovement(character, modelId);
+          }
         }
+      }, clip.duration*1000 - ANIMATION_FADE_TIME*1000);
+    }
 
     }
 }
