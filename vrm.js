@@ -34,6 +34,11 @@ import {
     animations_files
 } from './ui.js';
 
+import {
+    IDLE_MOVEMENT_CONFIGS,
+    getIdleAnimationClip
+} from './idleAnimations.js';
+
 export {
     loadScene,
     loadAllModels,
@@ -49,15 +54,16 @@ export {
     clearAnimationSequence,
     updateExpression,
     talk,
-    updateModel,
-    current_avatars,
-    renderer,
-    camera,
-    VRM_CONTAINER_NAME,
-    clearModelCache,
-    clearAnimationCache,
-    setLight,
-    setBackground
+  updateModel,
+  current_avatars,
+  renderer,
+  camera,
+  VRM_CONTAINER_NAME,
+  clearModelCache,
+  clearAnimationCache,
+  setLight,
+  setBackground,
+  cursorBasePoses
 }
 
 const VRM_CONTAINER_NAME = "VRM_CONTAINER";
@@ -84,8 +90,22 @@ let clock = undefined;
 const lookAtTarget = new THREE.Object3D();
 const IDLE_ANIMS = ["idle", "breathe", "nod", "shrug", "think", "relax", "glance"];
 
+// VRMA idle animation files cache
+let vrmaIdleFiles = [];
+let vrmaIdleCache = {}; // Cache loaded VRMA clips
+
 const naturalIdleTimers = {};
 const proceduralState = {};
+const activeIdleAnimations = {}; // Track active procedural idle animations
+
+// Store base bone poses to restore after VRMA animations
+const vrmaBoneBasePoses = {};
+
+// Track last idle animation completion time for cooldown
+const lastIdleCompletionTime = {};
+
+// Store base bone poses for cursor tracking
+const cursorBasePoses = {};
 
 let cursorTrackingEnabled = false;
 let cursorPosition = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
@@ -408,155 +428,168 @@ function resetAllBlendShapes(vrm) {
 }
 
 const NATURAL_MOVEMENTS = {
-    slowHeadTurn: {
-        type: 'head',
-        duration: 12000,
-        description: 'slow head turn',
-        action: (vrm, character, modelId) => {
-            const direction = Math.random() > 0.5 ? 1 : -1;
-            const angleY = (Math.random() * 0.3 + 0.12) * direction;
-            const angleX = (Math.random() * 0.12 - 0.06);
-            const angleZ = (Math.random() * 0.1 - 0.05) * direction;
+  slowHeadTurn: {
+    type: 'head',
+    duration: 12000,
+    description: 'slow head turn',
+    action: (vrm, character, modelId) => {
+      const direction = Math.random() > 0.5 ? 1 : -1;
+      const angleY = (Math.random() * 0.35 + 0.17) * direction;
+      const angleX = (Math.random() * 0.16 - 0.08);
+      const angleZ = (Math.random() * 0.1 - 0.05) * direction;
 
-            // Head movement
-            const headConfig = {
-                x: angleX,
-                y: angleY,
-                z: angleZ
-            };
-            applyNaturalMovementWithSlerp(vrm, "head", headConfig, character, modelId);
-            
-            // Neck follows with less rotation
-            const neck = vrm.humanoid?.getNormalizedBoneNode("neck");
-            if (neck) {
-                setTimeout(() => {
-                    const neckConfig = {
-                        x: angleX * 0.35,
-                        y: angleY * 0.4,
-                        z: angleZ * 0.5
-                    };
-                    applyNaturalMovementWithSlerp(vrm, "neck", neckConfig, character, modelId);
-                }, 200);
-            }
-            
-            // Subtle model rotation to follow head (lower body moves less)
-            const modelRotation = direction * (Math.random() * 0.08 + 0.04);
-            applyModelRotation(vrm, character, modelId, modelRotation, 10000);
-        }
-    },
-    headTilt: {
-        type: 'head',
-        duration: 12000,
-        description: 'curious head tilt',
-        action: (vrm, character, modelId) => {
-            const direction = Math.random() > 0.5 ? 1 : -1;
-            // More exaggerated tilt
-            const angleZ = (Math.random() * 0.35 + 0.2) * direction;
-            const angleX = (Math.random() * 0.15 - 0.075);
-            const angleY = (Math.random() * 0.15 - 0.075) * direction;
+      // Head movement
+      const headConfig = {
+        x: angleX,
+        y: angleY,
+        z: angleZ
+      };
+      applyNaturalMovementWithSlerp(vrm, "head", headConfig, character, modelId);
 
-            // Apply to head
-            const headConfig = {
-                x: angleX,
-                y: angleY,
-                z: angleZ
-            };
-            applyNaturalMovementWithSlerp(vrm, "head", headConfig, character, modelId);
-            
-            // Add subtle neck follow
-            const neck = vrm.humanoid?.getNormalizedBoneNode("neck");
-            if (neck) {
-                setTimeout(() => {
-                    const neckConfig = {
-                        x: angleX * 0.4,
-                        y: angleY * 0.3,
-                        z: angleZ * 0.5
-                    };
-                    applyNaturalMovementWithSlerp(vrm, "neck", neckConfig, character, modelId);
-                }, 200);
-            }
-            
-            // 30% chance to wink during head tilt
-            if (Math.random() > 0.7) {
-                const winkEye = direction > 0 ? 'blinkLeft' : 'blinkRight';
-                setTimeout(() => {
-                    applyIdleExpression(vrm, character, winkEye, 0.8, 1500);
-                }, 1000);
-            }
-            // 40% chance for curious smile
-            else if (Math.random() > 0.6) {
-                setTimeout(() => {
-                    applyIdleExpression(vrm, character, 'happy', 0.4, 2000);
-                }, 500);
-            }
-        }
-    },
-    slowGlance: {
-        type: 'head',
-        duration: 12000,
-        description: 'casual glance',
-        action: (vrm, character, modelId) => {
-            const directionX = Math.random() > 0.5 ? 1 : -1;
-            const directionY = Math.random() > 0.5 ? 1 : -1;
+      // Neck follows with natural follow-through
+      const neck = vrm.humanoid?.getNormalizedBoneNode("neck");
+      if (neck) {
+        setTimeout(() => {
+          const neckConfig = {
+            x: angleX * 0.5,
+            y: angleY * 0.42,
+            z: angleZ * 0.6
+          };
+          applyNaturalMovementWithSlerp(vrm, "neck", neckConfig, character, modelId);
+        }, 200);
+      }
 
-            const angleX = (Math.random() * 0.1 + 0.04) * directionX;
-            const angleY = (Math.random() * 0.22 + 0.1) * directionY;
-            const angleZ = (Math.random() * 0.08 - 0.04);
+      // More pronounced model rotation to follow head
+      const modelRotation = direction * (Math.random() * 0.1 + 0.08);
+      applyModelRotation(vrm, character, modelId, modelRotation, 10000);
+    }
+  },
+  headTilt: {
+    type: 'head',
+    duration: 12000,
+    description: 'curious head tilt',
+    action: (vrm, character, modelId) => {
+      const direction = Math.random() > 0.5 ? 1 : -1;
+      // More exaggerated tilt
+      const angleZ = (Math.random() * 0.35 + 0.27) * direction;
+      const angleX = (Math.random() * 0.12 - 0.06);
+      const angleY = (Math.random() * 0.16 - 0.08) * direction;
 
-            // Subtle model rotation with glance (reduced)
-            const modelRotation = directionY * (Math.random() * 0.06 + 0.03);
-            applyModelRotation(vrm, character, modelId, modelRotation, 9000);
-            
-            // 40% chance for curious expression
-            if (Math.random() > 0.6) {
-                setTimeout(() => applyIdleExpression(vrm, character, 'surprised', 0.5, 2000), 400);
-            }
+      // Apply to head
+      const headConfig = {
+        x: angleX,
+        y: angleY,
+        z: angleZ
+      };
+      applyNaturalMovementWithSlerp(vrm, "head", headConfig, character, modelId);
 
-            // Head glance
-            const headConfig = {
-                x: angleX,
-                y: angleY,
-                z: angleZ
-            };
-            applyNaturalMovementWithSlerp(vrm, "head", headConfig, character, modelId);
-            
-            // Spine slight twist for more natural look
-            const spine = vrm.humanoid?.getNormalizedBoneNode("spine");
-            if (spine) {
-                setTimeout(() => {
-                    const spineConfig = {
-                        x: angleX * 0.15,
-                        y: angleY * 0.25,
-                        z: angleZ * 0.3
-                    };
-                    applyNaturalMovementWithSlerp(vrm, "spine", spineConfig, character, modelId);
-                }, 400);
-            }
-        }
-    },
-    lookAround: {
-        type: 'head',
-        duration: 15000,
-        description: 'looking around',
-        action: (vrm, character, modelId) => {
-            // Model rotation that follows to look pattern
-            const modelRotation1 = 0.06;
-            const modelRotation2 = -0.05;
-            
-            setTimeout(() => applyModelRotation(vrm, character, modelId, modelRotation1, 4000), 500);
-            setTimeout(() => applyModelRotation(vrm, character, modelId, modelRotation2, 4000), 6000);
-            
-            // 50% chance for slight smile during look
-            if (Math.random() > 0.5) {
-                setTimeout(() => applyIdleExpression(vrm, character, 'happy', 0.4, 1500), 300);
-            }
-            
-            const directions = [
-                { x: 0.08, y: 0.2, duration: 3000 },
-                { x: 0.03, y: 0.0, duration: 2500 },
-                { x: 0.06, y: -0.18, duration: 3000 },
-                { x: -0.03, y: 0.0, duration: 2500 }
-            ];
+      // Add neck follow with more natural movement
+      const neck = vrm.humanoid?.getNormalizedBoneNode("neck");
+      if (neck) {
+        setTimeout(() => {
+          const neckConfig = {
+            x: angleX * 0.5,
+            y: angleY * 0.35,
+            z: angleZ * 0.57
+          };
+          applyNaturalMovementWithSlerp(vrm, "neck", neckConfig, character, modelId);
+        }, 200);
+      }
+
+      // 30% chance to wink during head tilt
+      if (Math.random() > 0.7) {
+        const winkEye = direction > 0 ? 'blinkLeft' : 'blinkRight';
+        setTimeout(() => {
+          applyIdleExpression(vrm, character, winkEye, 0.8, 1500);
+        }, 1000);
+      }
+      // 40% chance for curious smile
+      else if (Math.random() > 0.6) {
+        setTimeout(() => {
+          applyIdleExpression(vrm, character, 'happy', 0.4, 2000);
+        }, 500);
+      }
+    }
+  },
+  slowGlance: {
+    type: 'head',
+    duration: 10000,
+    description: 'casual glance',
+    action: (vrm, character, modelId) => {
+      const directionX = Math.random() > 0.5 ? 1 : -1;
+      const directionY = Math.random() > 0.5 ? 1 : -1;
+
+      const angleX = (Math.random() * 0.14 + 0.05) * directionX;
+      const angleY = (Math.random() * 0.28 + 0.13) * directionY;
+      const angleZ = (Math.random() * 0.16 - 0.08);
+
+      // More noticeable model rotation with glance
+      const modelRotation = directionY * (Math.random() * 0.07 + 0.05);
+      applyModelRotation(vrm, character, modelId, modelRotation, 9000);
+
+      // 50% chance for curious expression
+      if (Math.random() > 0.5) {
+        setTimeout(() => applyIdleExpression(vrm, character, 'surprised', 0.5, 2000), 400);
+      }
+
+      // Head glance - more pronounced
+      const headConfig = {
+        x: angleX,
+        y: angleY,
+        z: angleZ
+      };
+      applyNaturalMovementWithSlerp(vrm, "head", headConfig, character, modelId);
+
+      // Neck follows naturally
+      const neck = vrm.humanoid?.getNormalizedBoneNode("neck");
+      if (neck) {
+        setTimeout(() => {
+          const neckConfig = {
+            x: angleX * 0.5,
+            y: angleY * 0.54,
+            z: angleZ * 0.5
+          };
+          applyNaturalMovementWithSlerp(vrm, "neck", neckConfig, character, modelId);
+        }, 300);
+      }
+
+      // Spine twist for more natural look
+      const spine = vrm.humanoid?.getNormalizedBoneNode("spine");
+      if (spine) {
+        setTimeout(() => {
+          const spineConfig = {
+            x: angleX * 0.25,
+            y: angleY * 0.43,
+            z: angleZ * 0.38
+          };
+          applyNaturalMovementWithSlerp(vrm, "spine", spineConfig, character, modelId);
+        }, 500);
+      }
+    }
+  },
+  lookAround: {
+    type: 'head',
+    duration: 16000,
+    description: 'looking around',
+    action: (vrm, character, modelId) => {
+      // Model rotation that follows to look pattern - more dynamic
+      const modelRotation1 = 0.09;
+      const modelRotation2 = -0.08;
+
+      setTimeout(() => applyModelRotation(vrm, character, modelId, modelRotation1, 4500), 500);
+      setTimeout(() => applyModelRotation(vrm, character, modelId, modelRotation2, 4500), 7000);
+
+      // 60% chance for slight smile during look
+      if (Math.random() > 0.4) {
+        setTimeout(() => applyIdleExpression(vrm, character, 'happy', 0.45, 1800), 300);
+      }
+
+      const directions = [
+        { x: 0.12, y: 0.32, duration: 3500 },
+        { x: 0.05, y: 0.08, duration: 2500 },
+        { x: 0.1, y: -0.28, duration: 3500 },
+        { x: 0.02, y: -0.06, duration: 3000 }
+      ];
 
             let currentStep = 0;
             const head = vrm.humanoid?.getNormalizedBoneNode("head");
@@ -767,515 +800,324 @@ const NATURAL_MOVEMENTS = {
             animateStretch();
         }
     },
-    weightShift: {
-        type: 'body',
-        duration: 12000,
-        description: 'weight shift with spine twist',
-        action: (vrm, character, modelId) => {
-            const direction = Math.random() > 0.5 ? 1 : -1;
-            
-            // Model rotation with weight shift (reduced)
-            const modelRotation = direction * (Math.random() * 0.08 + 0.04);
-            applyModelRotation(vrm, character, modelId, modelRotation, 10000);
-            
-            // Spine: shift + twist
-            const spineConfig = {
-                x: Math.random() * 0.04 - 0.02,
-                y: (Math.random() * 0.15 + 0.05) * direction,
-                z: (Math.random() * 0.1 + 0.05) * direction
-            };
-            applyNaturalMovementWithSlerp(vrm, "spine", spineConfig, character, modelId);
-            
-            // Hips: counter-rotation for balance
-            const hips = vrm.humanoid?.getNormalizedBoneNode("hips");
-            if (hips) {
-                setTimeout(() => {
-                    const hipsConfig = {
-                        x: Math.random() * 0.03 - 0.015,
-                        y: -(Math.random() * 0.08 + 0.02) * direction,
-                        z: (Math.random() * 0.06 + 0.03) * direction
-                    };
-                    applyNaturalMovementWithSlerp(vrm, "hips", hipsConfig, character, modelId);
-                }, 250);
-            }
-            
-            // 40% chance for thoughtful expression
-            if (Math.random() > 0.6) {
-                setTimeout(() => applyIdleExpression(vrm, character, 'neutral', 0.5, 1500), 800);
-            }
-        }
-    },
-    neckStretch: {
-        type: 'neck',
-        duration: 12000,
-        description: 'neck stretch',
-        action: (vrm, character, modelId) => {
-            const directionX = Math.random() > 0.5 ? 1 : -1;
-            const directionY = Math.random() > 0.5 ? 1 : -1;
+  weightShift: {
+    type: 'body',
+    duration: 10000,
+    description: 'weight shift with spine twist',
+    action: (vrm, character, modelId) => {
+      const direction = Math.random() > 0.5 ? 1 : -1;
 
-            const movementConfig = {
-                x: (Math.random() * 0.12 + 0.05) * directionX,
-                y: (Math.random() * 0.15 + 0.05) * directionY,
-                z: (Math.random() * 0.06 - 0.03)
-            };
-            applyNaturalMovementWithSlerp(vrm, "neck", movementConfig, character, modelId);
-            
-            // 40% chance for curious expression
-            if (Math.random() > 0.6) {
-                setTimeout(() => applyIdleExpression(vrm, character, 'surprised', 0.5, 2000), 600);
-            }
-        }
-    },
-    subtleNod: {
-        type: 'head',
-        duration: 9000,
-        description: 'subtle nod',
-        action: (vrm, character, modelId) => {
-            const movementConfig = {
-                x: Math.random() * 0.2 + 0.08,
-                y: 0,
-                z: 0
-            };
-            applyNaturalMovementWithSlerp(vrm, "head", movementConfig, character, modelId);
-            
-            // 70% chance for gentle smile during nod
-            if (Math.random() > 0.3) {
-                setTimeout(() => applyIdleExpression(vrm, character, 'happy', 0.5, 1500), 1000);
-            }
-        }
-    },
-    hipShift: {
-        type: 'hips',
-        duration: 12000,
-        description: 'hip shift with rotation',
-        action: (vrm, character, modelId) => {
-            const direction = Math.random() > 0.5 ? 1 : -1;
-            
-            // Model rotation with hip shift (reduced)
-            const modelRotation = direction * (Math.random() * 0.07 + 0.04);
-            applyModelRotation(vrm, character, modelId, modelRotation, 10000);
-            
-            // Hip tilt + rotation for more dynamic movement
-            const hipConfig = {
-                x: (Math.random() * 0.08 - 0.04),
-                y: (Math.random() * 0.2 + 0.1) * direction,
-                z: (Math.random() * 0.15 + 0.08) * direction
-            };
-            applyNaturalMovementWithSlerp(vrm, "hips", hipConfig, character, modelId);
-            
-            // Spine counter-movement for balance
-            const spine = vrm.humanoid?.getNormalizedBoneNode("spine");
-            if (spine) {
-                setTimeout(() => {
-                    const spineConfig = {
-                        x: (Math.random() * 0.06 - 0.03),
-                        y: -(Math.random() * 0.12 + 0.05) * direction,
-                        z: -(Math.random() * 0.1 + 0.04) * direction
-                    };
-                    applyNaturalMovementWithSlerp(vrm, "spine", spineConfig, character, modelId);
-                }, 300);
-            }
-            
-            // 30% chance for curious expression
-            if (Math.random() > 0.7) {
-                setTimeout(() => applyIdleExpression(vrm, character, 'surprised', 0.6, 2000), 600);
-            }
-        }
-    },
-    handFidget: {
-        type: 'hand',
-        duration: 10000,
-        description: 'hand fidget',
-        action: (vrm, character, modelId) => {
-            const side = Math.random() > 0.5 ? "left" : "right";
-            const upperArm = vrm.humanoid?.getNormalizedBoneNode(`${side}UpperArm`);
-            if (!upperArm) return;
+      // More pronounced model rotation with weight shift
+      const modelRotation = direction * (Math.random() * 0.1 + 0.08);
+      applyModelRotation(vrm, character, modelId, modelRotation, 9000);
 
-            const movementConfig = {
-                x: 0,
-                y: 0,
-                z: (Math.random() * 0.18 + 0.06) * (side === "left" ? 1 : -1)
-            };
-            applyNaturalMovementWithSlerp(vrm, `${side}UpperArm`, movementConfig, character, modelId);
-            
-            // 50% chance for slight smile while fidgeting
-            if (Math.random() > 0.5) {
-                setTimeout(() => applyIdleExpression(vrm, character, 'happy', 0.4, 1500), 1200);
-            }
-        }
-    },
-    subtleNod: {
-        type: 'head',
-        duration: 9000,
-        description: 'subtle nod',
-        action: (vrm, character, modelId) => {
-            const movementConfig = {
-                x: Math.random() * 0.2 + 0.08,
-                y: 0,
-                z: 0
-            };
-            applyNaturalMovementWithSlerp(vrm, "head", movementConfig, character, modelId);
-        }
-    },
-    torsoSway: {
-        type: 'torso',
-        duration: 14000,
-        description: 'torso sway with twist',
-        action: (vrm, character, modelId) => {
-            const upperChest = vrm.humanoid?.getNormalizedBoneNode("upperChest");
-            const spine = vrm.humanoid?.getNormalizedBoneNode("spine");
-            if (!spine) return;
+      // Spine: shift + twist - much more visible
+      const spineConfig = {
+        x: Math.random() * 0.06 - 0.03,
+        y: (Math.random() * 0.22 + 0.1) * direction,
+        z: (Math.random() * 0.2 + 0.05) * direction
+      };
+      applyNaturalMovementWithSlerp(vrm, "spine", spineConfig, character, modelId);
 
-            const direction = Math.random() > 0.5 ? 1 : -1;
-            
-            // Model rotates with torso (reduced lower body movement)
-            const modelRotation = direction * (Math.random() * 0.08 + 0.04);
-            applyModelRotation(vrm, character, modelId, modelRotation, 12000);
-            
-            // Spine twist and tilt
-            const spineConfig = {
-                x: (Math.random() * 0.08 - 0.04),
-                y: (Math.random() * 0.25 + 0.1) * direction,
-                z: (Math.random() * 0.08 + 0.04) * direction
-            };
-            applyNaturalMovementWithSlerp(vrm, "spine", spineConfig, character, modelId);
-            
-            // Upper chest follows with delay
-            if (upperChest) {
-                setTimeout(() => {
-                    const chestConfig = {
-                        x: (Math.random() * 0.06 - 0.03),
-                        y: (Math.random() * 0.15 + 0.05) * direction,
-                        z: (Math.random() * 0.06 + 0.02) * direction
-                    };
-                    applyNaturalMovementWithSlerp(vrm, "upperChest", chestConfig, character, modelId);
-                }, 300);
-            }
-            
-            // 50% chance for confident or curious expression
-            if (Math.random() > 0.5) {
-                const expression = Math.random() > 0.7 ? 'surprised' : 'relaxed';
-                const intensity = 0.5;
-                setTimeout(() => applyIdleExpression(vrm, character, expression, intensity, 1800), 1200);
-            }
-        }
-    },
-    feminineHipSway: {
-        type: 'hips',
-        duration: 14000,
-        description: 'feminine hip sway',
-        action: (vrm, character, modelId) => {
-            const swayAmount = Math.random() * 0.25 + 0.12;
-            const direction = Math.random() > 0.5 ? 1 : -1;
-            
-            // Model sways with hips (subtle)
-            const modelRotation = direction * (Math.random() * 0.06 + 0.03);
-            applyModelRotation(vrm, character, modelId, modelRotation, 12000);
-            
-            // Hip sway with rotation
-            const hipConfig = {
-                x: (Math.random() * 0.06 - 0.03),
-                y: Math.random() * 0.15,
-                z: swayAmount
-            };
-            applyNaturalMovementWithSlerp(vrm, "hips", hipConfig, character, modelId);
-            
-            // Spine follows with delay
-            const spine = vrm.humanoid?.getNormalizedBoneNode("spine");
-            if (spine) {
-                setTimeout(() => {
-                    const spineConfig = {
-                        x: (Math.random() * 0.04 - 0.02),
-                        y: -(Math.random() * 0.08),
-                        z: -swayAmount * 0.5
-                    };
-                    applyNaturalMovementWithSlerp(vrm, "spine", spineConfig, character, modelId);
-                }, 300);
-            }
-            
-            // 60% chance for pleasant expression
-            if (Math.random() > 0.4) {
-                setTimeout(() => applyIdleExpression(vrm, character, 'happy', 0.45, 2000), 1500);
-            }
-        }
-    },
-    wristRotate: {
-        type: 'wrist',
-        duration: 9000,
-        description: 'wrist rotate',
-        action: (vrm, character, modelId) => {
-            const side = Math.random() > 0.5 ? "left" : "right";
-            const hand = vrm.humanoid?.getNormalizedBoneNode(`${side}Hand`);
-            if (!hand) return;
+      // Upper chest follows for more natural movement
+      const upperChest = vrm.humanoid?.getNormalizedBoneNode("upperChest");
+      if (upperChest) {
+        setTimeout(() => {
+          const chestConfig = {
+            x: Math.random() * 0.04 - 0.02,
+            y: (Math.random() * 0.1 + 0.05) * direction,
+            z: (Math.random() * 0.12 + 0.04) * direction
+          };
+          applyNaturalMovementWithSlerp(vrm, "upperChest", chestConfig, character, modelId);
+        }, 200);
+      }
 
-            const direction = Math.random() > 0.5 ? 1 : -1;
-            const movementConfig = {
-                x: 0,
-                y: 0,
-                z: (Math.random() * 0.2 + 0.08) * direction
-            };
-            applyNaturalMovementWithSlerp(vrm, `${side}Hand`, movementConfig, character, modelId);
-            
-            // 30% chance for curious expression
-            if (Math.random() > 0.7) {
-                setTimeout(() => applyIdleExpression(vrm, character, 'surprised', 0.5, 1800), 1000);
-            }
-        }
-    },
-    feminineHipSway: {
-        type: 'hips',
-        duration: 14000,
-        description: 'feminine hip sway',
-        action: (vrm, character, modelId) => {
-            const swayAmount = Math.random() * 0.25 + 0.12;
-            const direction = Math.random() > 0.5 ? 1 : -1;
-            
-            // Model sways with hips
-            const modelRotation = direction * (Math.random() * 0.06 + 0.03);
-            applyModelRotation(vrm, character, modelId, modelRotation, 12000);
-            
-            // Hip sway with rotation
-            const hipConfig = {
-                x: Math.random() * 0.06 - 0.03,
-                y: Math.random() * 0.15,
-                z: swayAmount
-            };
-            applyNaturalMovementWithSlerp(vrm, "hips", hipConfig, character, modelId);
-            
-            // Upper body counter-sway for natural look
-            const upperChest = vrm.humanoid?.getNormalizedBoneNode("upperChest");
-            const spine = vrm.humanoid?.getNormalizedBoneNode("spine");
-            
-            if (spine) {
-                setTimeout(() => {
-                    const spineConfig = {
-                        x: Math.random() * 0.04 - 0.02,
-                        y: -(Math.random() * 0.08),
-                        z: -swayAmount * 0.5
-                    };
-                    applyNaturalMovementWithSlerp(vrm, "spine", spineConfig, character, modelId);
-                }, 250);
-            }
-            
-            if (upperChest) {
-                setTimeout(() => {
-                    const chestConfig = {
-                        x: (Math.random() * 0.05 - 0.025),
-                        y: -(Math.random() * 0.1),
-                        z: -swayAmount * 0.3
-                    };
-                    applyNaturalMovementWithSlerp(vrm, "upperChest", chestConfig, character, modelId);
-                }, 400);
-            }
-        }
-    },
-    handToFace: {
-        type: 'hand',
-        duration: 7000,
-        description: 'hand to face',
-        action: (vrm, character, modelId) => {
-            const side = Math.random() > 0.5 ? "left" : "right";
-            const upperArm = vrm.humanoid?.getNormalizedBoneNode(`${side}UpperArm`);
-            const hand = vrm.humanoid?.getNormalizedBoneNode(`${side}Hand`);
-            if (!upperArm) return;
+      // Hips: counter-rotation for balance
+      const hips = vrm.humanoid?.getNormalizedBoneNode("hips");
+      if (hips) {
+        setTimeout(() => {
+          const hipsConfig = {
+            x: Math.random() * 0.06 - 0.03,
+            y: -(Math.random() * 0.12 + 0.05) * direction,
+            z: (Math.random() * 0.15 + 0.05) * direction
+          };
+          applyNaturalMovementWithSlerp(vrm, "hips", hipsConfig, character, modelId);
+        }, 350);
+      }
 
-            const startTime = Date.now();
-            const baseUpper = upperArm.quaternion.clone();
-            const baseHand = hand?.quaternion.clone();
-
-            const rampDuration = 2000;
-            const holdDuration = 3000;
-            const totalDuration = rampDuration * 2 + holdDuration;
-
-            function animate() {
-                if (current_avatars[character]?.vrm !== vrm || current_avatars[character]?.["id"] !== modelId) return;
-
-					const elapsed = Date.now() - startTime;
-
-					if (elapsed >= totalDuration) {
-					upperArm.quaternion.slerp(baseUpper, 0.03);
-
-					if (hand && baseHand) {
-					hand.quaternion.slerp(baseHand, 0.03);
-					}
-
-					if (
-					upperArm.quaternion.angleTo(baseUpper) > 0.001 ||
-					(hand && hand.quaternion.angleTo(baseHand) > 0.001)
-					) {
-						requestAnimationFrame(animate);
-					}
-
-					return;
-				}
-
-
-                let amplitude = 0;
-                if (elapsed < rampDuration) {
-                    amplitude = easeInOutCubic(elapsed / rampDuration);
-                } else if (elapsed < rampDuration + holdDuration) {
-                    amplitude = 1;
-                } else {
-                    amplitude = 1 - easeInOutCubic((elapsed - rampDuration - holdDuration) / rampDuration);
-                }
-
-                const toFaceEuler = new THREE.Euler(
-                    side === "left" ? -0.15 * amplitude : 0.15 * amplitude,
-                    0,
-                    -0.18 * amplitude
-                );
-                const toFaceQuat = new THREE.Quaternion().setFromEuler(toFaceEuler);
-                upperArm.quaternion.slerp(baseUpper.clone().multiply(toFaceQuat), 0.04);
-
-                if (hand && baseHand) {
-                    const handRotate = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, -0.25 * amplitude));
-                    hand.quaternion.slerp(baseHand.clone().multiply(handRotate), 0.04);
-                }
-
-                requestAnimationFrame(animate);
-            }
-
-            animate();
-            
-            // 60% chance for thoughtful expression
-            if (Math.random() > 0.4) {
-                setTimeout(() => applyIdleExpression(vrm, character, 'neutral', 0.7, 2000), 1500);
-            }
-        }
-    },
-    coyHeadTilt: {
-        type: 'head',
-        duration: 12000,
-        description: 'coy head tilt',
-        action: (vrm, character, modelId) => {
-            const movementConfig = {
-                x: 0.12,
-                y: 0,
-                z: -0.22
-            };
-            applyNaturalMovementWithSlerp(vrm, "head", movementConfig, character, modelId);
-            
-            // 70% chance for shy or cute expression
-            const expression = Math.random() > 0.3 ? 'relaxed' : 'shy';
-            setTimeout(() => applyIdleExpression(vrm, character, expression, 0.6, 2500), 1500);
-        }
-    },
-    chestLift: {
-        type: 'chest',
-        duration: 10000,
-        description: 'chest lift',
-        action: (vrm, character, modelId) => {
-            const upperChest = vrm.humanoid?.getNormalizedBoneNode("upperChest") || vrm.humanoid?.getNormalizedBoneNode("chest");
-            if (!upperChest) return;
-            const boneName = upperChest.name;
-
-            const movementConfig = {
-                x: -0.15,
-                y: 0,
-                z: 0
-            };
-            applyNaturalMovementWithSlerp(vrm, boneName, movementConfig, character, modelId);
-            
-            // 50% chance for confident or proud expression
-            if (Math.random() > 0.5) {
-                const expression = Math.random() > 0.5 ? 'happy' : 'relaxed';
-                setTimeout(() => applyIdleExpression(vrm, character, expression, 0.6, 1800), 2000);
-            }
-        }
-    },
-    shoulderRoll: {
-        type: 'shoulder',
-        duration: 6500,
-        description: 'shoulder roll',
-        action: (vrm, character, modelId) => {
-            const side1 = Math.random() > 0.5 ? "leftShoulder" : "rightShoulder";
-            const side2 = side1 === "leftShoulder" ? "rightShoulder" : "leftShoulder";
-            const shoulder1 = vrm.humanoid?.getNormalizedBoneNode(side1);
-            const shoulder2 = vrm.humanoid?.getNormalizedBoneNode(side2);
-            if (!shoulder1 || !shoulder2) return;
-
-            const startTime = Date.now();
-            const base1 = shoulder1.quaternion.clone();
-            const base2 = shoulder2.quaternion.clone();
-
-            const rampDuration = 2500;
-            const holdDuration = 4000;
-            const totalDuration = rampDuration * 2 + holdDuration;
-
-            function animateRoll() {
-                if (current_avatars[character]?.vrm !== vrm || current_avatars[character]?.["id"] !== modelId) return;
-
-                const elapsed = Date.now() - startTime;
-
-                if (elapsed >= totalDuration) {
-                    shoulder1.quaternion.slerp(base1, 0.03);
-                    shoulder2.quaternion.slerp(base2, 0.03);
-                    if (shoulder1.quaternion.angleTo(base1) > 0.001 ||
-                            shoulder2.quaternion.angleTo(base2) > 0.001) {
-                        requestAnimationFrame(animateRoll);
-                    }
-                    return;
-                }
-
-                // 50% chance for casual or confident expression
-                if (Math.random() > 0.5) {
-                    const expression = Math.random() > 0.5 ? 'relaxed' : 'happy';
-                    setTimeout(() => applyIdleExpression(vrm, character, expression, 0.5, 1800), 1200);
-                }
-
-                let amplitude = 0;
-                if (elapsed < rampDuration) {
-                    amplitude = easeInOutCubic(elapsed / rampDuration);
-                } else if (elapsed < rampDuration + holdDuration) {
-                    amplitude = 1;
-                } else {
-                    amplitude = 1 - easeInOutCubic((elapsed - rampDuration - holdDuration) / rampDuration);
-                }
-
-                const rollEuler1 = new THREE.Euler(0.18 * amplitude, 0, 0);
-                const rollQuat1 = new THREE.Quaternion().setFromEuler(rollEuler1);
-                shoulder1.quaternion.slerp(base1.clone().multiply(rollQuat1), 0.04);
-
-                const rollEuler2 = new THREE.Euler(-0.15 * amplitude, 0, 0);
-                const rollQuat2 = new THREE.Quaternion().setFromEuler(rollEuler2);
-                shoulder2.quaternion.slerp(base2.clone().multiply(rollQuat2), 0.04);
-
-                requestAnimationFrame(animateRoll);
-            }
-
-            animateRoll();
-        }
-    },
-    coyHeadTilt: {
-        type: 'head',
-        duration: 12000,
-        description: 'coy head tilt',
-        action: (vrm, character, modelId) => {
-            const movementConfig = {
-                x: 0.12,
-                y: 0,
-                z: -0.22
-            };
-            applyNaturalMovementWithSlerp(vrm, "head", movementConfig, character, modelId);
-        }
-    },
-    chestLift: {
-        type: 'chest',
-        duration: 10000,
-        description: 'chest lift',
-        action: (vrm, character, modelId) => {
-            const upperChest = vrm.humanoid?.getNormalizedBoneNode("upperChest") || vrm.humanoid?.getNormalizedBoneNode("chest");
-            if (!upperChest) return;
-            const boneName = upperChest.name;
-
-            const movementConfig = {
-                x: -0.15,
-                y: 0,
-                z: 0
-            };
-            applyNaturalMovementWithSlerp(vrm, boneName, movementConfig, character, modelId);
-        }
+      // 40% chance for thoughtful expression
+      if (Math.random() > 0.6) {
+        setTimeout(() => applyIdleExpression(vrm, character, 'neutral', 0.5, 1500), 800);
+      }
     }
+  },
+  neckStretch: {
+    type: 'neck',
+    duration: 10000,
+    description: 'neck stretch',
+    action: (vrm, character, modelId) => {
+      const directionX = Math.random() > 0.5 ? 1 : -1;
+      const directionY = Math.random() > 0.5 ? 1 : -1;
+      const directionZ = Math.random() > 0.5 ? 1 : -1;
+
+      // Neck tilt - more pronounced stretching motion
+      const neckConfig = {
+        x: (Math.random() * 0.12 + 0.06) * directionX,
+        y: (Math.random() * 0.25 + 0.05) * directionY,
+        z: (Math.random() * 0.4 + 0.15) * directionZ
+      };
+      applyNaturalMovementWithSlerp(vrm, "neck", neckConfig, character, modelId);
+
+      // Head follows for natural stretching
+      const head = vrm.humanoid?.getNormalizedBoneNode("head");
+      if (head) {
+        setTimeout(() => {
+          const headConfig = {
+            x: neckConfig.x * 0.7,
+            y: neckConfig.y * 0.6,
+            z: neckConfig.z * 0.8
+          };
+          applyNaturalMovementWithSlerp(vrm, "head", headConfig, character, modelId);
+        }, 200);
+      }
+
+      // 50% chance for expression during stretch
+      if (Math.random() > 0.5) {
+        setTimeout(() => applyIdleExpression(vrm, character, 'surprised', 0.55, 2200), 500);
+      }
+    }
+  },
+  subtleNod: {
+    type: 'head',
+    duration: 8000,
+    description: 'subtle nod',
+    action: (vrm, character, modelId) => {
+      const direction = Math.random() > 0.5 ? 1 : -1;
+      // More pronounced nod with slight natural variation
+      const headConfig = {
+        x: Math.random() * 0.14 + 0.08,
+        y: (Math.random() * 0.05) * direction,
+        z: (Math.random() * 0.03) * direction
+      };
+      applyNaturalMovementWithSlerp(vrm, "head", headConfig, character, modelId);
+
+      // Neck follows naturally
+      const neck = vrm.humanoid?.getNormalizedBoneNode("neck");
+      if (neck) {
+        setTimeout(() => {
+          const neckConfig = {
+            x: headConfig.x * 0.55,
+            y: headConfig.y * 0.6,
+            z: headConfig.z * 0.5
+          };
+          applyNaturalMovementWithSlerp(vrm, "neck", neckConfig, character, modelId);
+        }, 200);
+      }
+
+      // 70% chance for gentle smile during nod
+      if (Math.random() > 0.3) {
+        setTimeout(() => applyIdleExpression(vrm, character, 'happy', 0.5, 1500), 1000);
+      }
+    }
+  },
+  hipShift: {
+    type: 'hips',
+    duration: 11000,
+    description: 'hip shift with rotation',
+    action: (vrm, character, modelId) => {
+      const direction = Math.random() > 0.5 ? 1 : -1;
+
+      // Model rotation with hip shift - more dynamic
+      const modelRotation = direction * (Math.random() * 0.08 + 0.08);
+      applyModelRotation(vrm, character, modelId, modelRotation, 9500);
+
+      // Hip tilt + rotation for more dynamic movement
+      const hipConfig = {
+        x: (Math.random() * 0.08 - 0.04),
+        y: (Math.random() * 0.25 + 0.1) * direction,
+        z: (Math.random() * 0.22 + 0.12) * direction
+      };
+      applyNaturalMovementWithSlerp(vrm, "hips", hipConfig, character, modelId);
+
+      // Upper chest counter-movement for balance
+      const upperChest = vrm.humanoid?.getNormalizedBoneNode("upperChest");
+      if (upperChest) {
+        setTimeout(() => {
+          const chestConfig = {
+            x: (Math.random() * 0.05 - 0.025),
+            y: (Math.random() * 0.08 + 0.04) * direction,
+            z: (Math.random() * 0.08 + 0.04) * direction
+          };
+          applyNaturalMovementWithSlerp(vrm, "upperChest", chestConfig, character, modelId);
+        }, 250);
+      }
+
+      // Spine counter-movement for balance
+      const spine = vrm.humanoid?.getNormalizedBoneNode("spine");
+      if (spine) {
+        setTimeout(() => {
+          const spineConfig = {
+            x: (Math.random() * 0.08 - 0.04),
+            y: -(Math.random() * 0.15 + 0.08) * direction,
+            z: -(Math.random() * 0.12 + 0.07) * direction
+          };
+          applyNaturalMovementWithSlerp(vrm, "spine", spineConfig, character, modelId);
+        }, 400);
+      }
+
+      // 40% chance for curious expression
+      if (Math.random() > 0.6) {
+        setTimeout(() => applyIdleExpression(vrm, character, 'surprised', 0.6, 2200), 700);
+      }
+    }
+  },
+  feminineHipSway: {
+    type: 'hips',
+    duration: 14000,
+    description: 'feminine hip sway',
+    action: (vrm, character, modelId) => {
+      const swayAmount = Math.random() * 0.25 + 0.22;
+      const direction = Math.random() > 0.5 ? 1 : -1;
+
+      // Model sways with hips - more pronounced
+      const modelRotation = direction * (Math.random() * 0.08 + 0.06);
+      applyModelRotation(vrm, character, modelId, modelRotation, 12000);
+
+      // Hip sway with rotation - more dynamic
+      const hipConfig = {
+        x: (Math.random() * 0.08 - 0.04),
+        y: Math.random() * 0.15,
+        z: swayAmount
+      };
+      applyNaturalMovementWithSlerp(vrm, "hips", hipConfig, character, modelId);
+
+      // Upper chest follows for more graceful movement
+      const upperChest = vrm.humanoid?.getNormalizedBoneNode("upperChest");
+      if (upperChest) {
+        setTimeout(() => {
+          const chestConfig = {
+            x: (Math.random() * 0.06 - 0.03),
+            y: -(Math.random() * 0.12 + 0.05),
+            z: -swayAmount * 0.35
+          };
+          applyNaturalMovementWithSlerp(vrm, "upperChest", chestConfig, character, modelId);
+        }, 200);
+      }
+
+      // Spine follows with delay
+      const spine = vrm.humanoid?.getNormalizedBoneNode("spine");
+      if (spine) {
+        setTimeout(() => {
+          const spineConfig = {
+            x: (Math.random() * 0.06 - 0.03),
+            y: -(Math.random() * 0.1),
+            z: -swayAmount * 0.52
+          };
+          applyNaturalMovementWithSlerp(vrm, "spine", spineConfig, character, modelId);
+        }, 400);
+      }
+
+      // Neck slight movement for elegance
+      const neck = vrm.humanoid?.getNormalizedBoneNode("neck");
+      if (neck) {
+        setTimeout(() => {
+          const neckConfig = {
+            x: (Math.random() * 0.04 - 0.02),
+            y: -(Math.random() * 0.08),
+            z: (Math.random() * 0.1 - 0.05)
+          };
+          applyNaturalMovementWithSlerp(vrm, "neck", neckConfig, character, modelId);
+        }, 600);
+      }
+
+      // 70% chance for pleasant expression
+      if (Math.random() > 0.3) {
+        setTimeout(() => applyIdleExpression(vrm, character, 'happy', 0.5, 2200), 1200);
+      }
+    }
+  },
+  coyHeadTilt: {
+    type: 'head',
+    duration: 11000,
+    description: 'coy head tilt',
+    action: (vrm, character, modelId) => {
+      const direction = Math.random() > 0.5 ? 1 : -1;
+      // More pronounced coy tilt with slight angle variation
+      const headConfig = {
+        x: Math.random() * 0.1 + 0.1,
+        y: (Math.random() * 0.12) * direction,
+        z: -(Math.random() * 0.16 + 0.22) * direction
+      };
+      applyNaturalMovementWithSlerp(vrm, "head", headConfig, character, modelId);
+
+      // Neck follows for more natural movement
+      const neck = vrm.humanoid?.getNormalizedBoneNode("neck");
+      if (neck) {
+        setTimeout(() => {
+          const neckConfig = {
+            x: headConfig.x * 0.53,
+            y: headConfig.y * 0.5,
+            z: headConfig.z * 0.58
+          };
+          applyNaturalMovementWithSlerp(vrm, "neck", neckConfig, character, modelId);
+        }, 200);
+      }
+
+      // 70% chance for shy or cute expression
+      const expression = Math.random() > 0.3 ? 'relaxed' : 'shy';
+      setTimeout(() => applyIdleExpression(vrm, character, expression, 0.65, 2500), 1200);
+    }
+  },
+  chestLift: {
+    type: 'chest',
+    duration: 9000,
+    description: 'chest lift',
+    action: (vrm, character, modelId) => {
+      const upperChest = vrm.humanoid?.getNormalizedBoneNode("upperChest") || vrm.humanoid?.getNormalizedBoneNode("chest");
+      if (!upperChest) return;
+      const boneName = upperChest.name;
+
+      // Chest actually lifts now - positive X rotation pushes chest forward
+      const chestConfig = {
+        x: Math.random() * 0.1 + 0.18,
+        y: Math.random() * 0.06 - 0.03,
+        z: Math.random() * 0.05 - 0.025
+      };
+      applyNaturalMovementWithSlerp(vrm, boneName, chestConfig, character, modelId);
+
+      // Spine follows naturally
+      const spine = vrm.humanoid?.getNormalizedBoneNode("spine");
+      if (spine) {
+        setTimeout(() => {
+          const spineConfig = {
+            x: chestConfig.x * 0.55,
+            y: chestConfig.y * 0.5,
+            z: chestConfig.z * 0.5
+          };
+          applyNaturalMovementWithSlerp(vrm, "spine", spineConfig, character, modelId);
+        }, 250);
+      }
+
+      // Neck slight adjustment for natural lift
+      const neck = vrm.humanoid?.getNormalizedBoneNode("neck");
+      if (neck) {
+        setTimeout(() => {
+          const neckConfig = {
+            x: -chestConfig.x * 0.35,
+            y: 0,
+            z: 0
+          };
+          applyNaturalMovementWithSlerp(vrm, "neck", neckConfig, character, modelId);
+        }, 400);
+      }
+
+      // 60% chance for confident or proud expression
+      if (Math.random() > 0.4) {
+        const expression = Math.random() > 0.5 ? 'happy' : 'relaxed';
+        setTimeout(() => applyIdleExpression(vrm, character, expression, 0.65, 2000), 1800);
+      }
+    }
+  },
 };
 
 // debug
@@ -1299,135 +1141,173 @@ function updateCursorTracking() {
 }
 
 function applyCursorTiltAndShift(vrm, character) {
-  if (!cursorTiltState[character]) {
-    const upperChest = vrm.humanoid?.getNormalizedBoneNode("upperChest");
-    const objectContainer = current_avatars[character]?.["objectContainer"];
-    
-    if (upperChest && objectContainer) {
-      cursorTiltState[character] = {
-        // Upper chest state
-        baseRotation: upperChest.quaternion.clone(),
-        targetYaw: 0,
-        currentYaw: 0,
-        targetPitch: 0,
-        currentPitch: 0,
-        // Model Y rotation state
-        modelBaseRotation: objectContainer.rotation.y,
-        modelTargetYaw: 0,
-        modelCurrentYaw: 0,
-        // Model X rotation state (pitch - most subtle)
-        modelBaseRotationX: objectContainer.rotation.x,
-        modelTargetPitch: 0,
-        modelCurrentPitch: 0
-      };
-    }
-  }
-  
-  const state = cursorTiltState[character];
   const upperChest = vrm.humanoid?.getNormalizedBoneNode("upperChest");
   const objectContainer = current_avatars[character]?.["objectContainer"];
-  
-  if (!state || !upperChest || !objectContainer) return;
-  
+
+  if (!upperChest || !objectContainer) return;
+
+  // Initialize state
+  if (!cursorTiltState[character]) {
+    cursorTiltState[character] = {
+      currentYaw: 0,
+      currentPitch: 0,
+      modelCurrentYaw: 0,
+      modelCurrentPitch: 0,
+      neckCurrentYaw: 0,
+      neckCurrentPitch: 0
+    };
+    // Store base poses when cursor tracking starts
+    if (!cursorBasePoses[character]) {
+      cursorBasePoses[character] = {};
+    }
+    cursorBasePoses[character]["upperChest"] = upperChest.quaternion.clone();
+    const neck = vrm.humanoid?.getNormalizedBoneNode("neck");
+    if (neck) {
+      cursorBasePoses[character]["neck"] = neck.quaternion.clone();
+    }
+  }
+
+  const state = cursorTiltState[character];
+
   const cursorX = (cursorPosition.x / window.innerWidth) * 2 - 1;
   const cursorY = -(cursorPosition.y / window.innerHeight) * 2 + 1;
+
+  // HIERARCHY: Eyes > Head > Neck > Upper Body > Lower Body
+
+  // MODEL Y ROTATION (Lower body horizontal) - Moderate turn
+  const targetModelYaw = cursorX * 0.20;
+  state.modelCurrentYaw += (targetModelYaw - state.modelCurrentYaw) * 0.04;
+  objectContainer.rotation.y += (targetModelYaw - state.modelCurrentYaw) * 0.04;
+
+  // MODEL X ROTATION (Lower body pitch) - Bend forward when looking down (reduced)
+  const targetModelPitch = cursorY * 0.08;
+  state.modelCurrentPitch += (targetModelPitch - state.modelCurrentPitch) * 0.03;
+  objectContainer.rotation.x += (targetModelPitch - state.modelCurrentPitch) * 0.03;
+
+  // UPPER CHEST - Moderate head/chest tracking (reduced pitch to prevent excessive leaning)
+  const targetYaw = cursorX * 0.18;
+  const targetPitch = cursorY * 0.12;
+
+  // Smooth interpolation towards target with limits to prevent drift
+  state.currentYaw += (targetYaw - state.currentYaw) * 0.08;
+  state.currentPitch += (targetPitch - state.currentPitch) * 0.08;
   
-   // HIERARCHY: Eyes > Head > Neck > Upper Body > Lower Body
-   // Each level moves less than the one above it
-   
-   // MODEL Y ROTATION (Lower body horizontal) - Moderate turn
-   state.modelTargetYaw = cursorX * 0.20;
-   state.modelCurrentYaw += (state.modelTargetYaw - state.modelCurrentYaw) * 0.04;
-   objectContainer.rotation.y = state.modelBaseRotation + state.modelCurrentYaw;
-   
-   // MODEL X ROTATION (Lower body pitch) - Bend forward when looking down
-   state.modelTargetPitch = cursorY * 0.15;
-   state.modelCurrentPitch += (state.modelTargetPitch - state.modelCurrentPitch) * 0.03;
-   objectContainer.rotation.x = state.modelBaseRotationX + state.modelCurrentPitch;
-   
-   // UPPER CHEST - Moderate head/chest tracking
-   state.targetYaw = cursorX * 0.18;
-   state.targetPitch = cursorY * 0.25;
-   
-   // Smooth interpolation
-   state.currentYaw += (state.targetYaw - state.currentYaw) * 0.08;
-   state.currentPitch += (state.targetPitch - state.currentPitch) * 0.08;
-   
-   // Apply as Euler rotation
-   const targetEuler = new THREE.Euler(
-     state.currentPitch,
-     state.currentYaw,
-     -state.currentYaw * 0.15
-   );
-   const targetQuat = new THREE.Quaternion().setFromEuler(targetEuler);
-   
-   upperChest.quaternion.slerp(state.baseRotation.clone().multiply(targetQuat), 0.10);
-   
-   // Neck rotation - add extra movement between chest and head
-   const neck = vrm.humanoid?.getNormalizedBoneNode("neck");
-   if (neck) {
-     const neckTargetYaw = cursorX * 0.25;
-     const neckTargetPitch = cursorY * 0.35;
-     
-     if (!state.neckBaseRotation) {
-       state.neckBaseRotation = neck.quaternion.clone();
-     }
-     
-     if (state.neckCurrentYaw === undefined) {
-       state.neckCurrentYaw = 0;
-       state.neckCurrentPitch = 0;
-     }
-     
-     state.neckCurrentYaw += (neckTargetYaw - state.neckCurrentYaw) * 0.12;
-     state.neckCurrentPitch += (neckTargetPitch - state.neckCurrentPitch) * 0.12;
-     
-     const neckEuler = new THREE.Euler(
-       state.neckCurrentPitch,
-       state.neckCurrentYaw,
-       -state.neckCurrentYaw * 0.1
-     );
-     const neckQuat = new THREE.Quaternion().setFromEuler(neckEuler);
-     neck.quaternion.slerp(state.neckBaseRotation.clone().multiply(neckQuat), 0.12);
-   }
-   
-   // Eyes are handled by VRM's built-in lookAt.target - no manual bone manipulation
+  // Clamp cursor offsets to prevent excessive accumulation
+  state.currentYaw = Math.max(-0.4, Math.min(0.4, state.currentYaw));
+  state.currentPitch = Math.max(-0.5, Math.min(0.5, state.currentPitch));
+
+  // Apply cursor rotation relative to base pose (not additively)
+  const baseChestQuat = cursorBasePoses[character]?.["upperChest"] || upperChest.quaternion.clone();
+  const cursorEuler = new THREE.Euler(state.currentPitch, state.currentYaw, -state.currentYaw * 0.15);
+  const cursorQuat = new THREE.Quaternion().setFromEuler(cursorEuler);
+  upperChest.quaternion.copy(baseChestQuat).multiply(cursorQuat);
+
+  // Neck rotation - add extra movement between chest and head
+  const neck = vrm.humanoid?.getNormalizedBoneNode("neck");
+  if (neck) {
+    const neckTargetYaw = cursorX * 0.25;
+    const neckTargetPitch = cursorY * 0.08;
+
+    state.neckCurrentYaw += (neckTargetYaw - state.neckCurrentYaw) * 0.12;
+    state.neckCurrentPitch += (neckTargetPitch - state.neckCurrentPitch) * 0.12;
+    
+    // Clamp neck offsets to prevent excessive accumulation
+    state.neckCurrentYaw = Math.max(-0.6, Math.min(0.6, state.neckCurrentYaw));
+    state.neckCurrentPitch = Math.max(-0.7, Math.min(0.7, state.neckCurrentPitch));
+
+    // Apply cursor rotation relative to base pose
+    const baseNeckQuat = cursorBasePoses[character]?.["neck"] || neck.quaternion.clone();
+    const neckCursorEuler = new THREE.Euler(state.neckCurrentPitch, state.neckCurrentYaw, -state.neckCurrentYaw * 0.1);
+    const neckCursorQuat = new THREE.Quaternion().setFromEuler(neckCursorEuler);
+    neck.quaternion.copy(baseNeckQuat).multiply(neckCursorQuat);
+  }
+
+  // Eyes are handled by VRM's built-in lookAt.target - no manual bone manipulation
 }
 
 function resetCursorTilt(vrm, character) {
   if (!cursorTiltState[character]) return;
-  
+
   const state = cursorTiltState[character];
-  const upperChest = vrm.humanoid?.getNormalizedBoneNode("upperChest");
   const objectContainer = current_avatars[character]?.["objectContainer"];
-  
+
   let allReset = true;
-  
-  // Reset model Y rotation
+
+  // Smoothly return cursor offsets to zero
+  // Model rotations
   if (objectContainer) {
-    const currentYaw = objectContainer.rotation.y - state.modelBaseRotation;
-    objectContainer.rotation.y += (state.modelBaseRotation - objectContainer.rotation.y) * 0.03;
-    if (Math.abs(currentYaw) > 0.001) allReset = false;
-    
-    // Reset model X rotation
-    const currentPitch = objectContainer.rotation.x - state.modelBaseRotationX;
-    objectContainer.rotation.x += (state.modelBaseRotationX - objectContainer.rotation.x) * 0.02;
-    if (Math.abs(currentPitch) > 0.001) allReset = false;
+    const modelYawDelta = -state.modelCurrentYaw * 0.03;
+    const modelPitchDelta = -state.modelCurrentPitch * 0.02;
+
+    objectContainer.rotation.y += modelYawDelta;
+    objectContainer.rotation.x += modelPitchDelta;
+
+    state.modelCurrentYaw *= 0.97;
+    state.modelCurrentPitch *= 0.97;
+
+    if (Math.abs(state.modelCurrentYaw) > 0.001 || Math.abs(state.modelCurrentPitch) > 0.001) {
+      allReset = false;
+    }
   }
-  
-   if (upperChest) {
-    upperChest.quaternion.slerp(state.baseRotation, 0.04);
-    if (upperChest.quaternion.angleTo(state.baseRotation) > 0.001) allReset = false;
+
+  // Upper chest - return to base pose
+  const upperChest = vrm.humanoid?.getNormalizedBoneNode("upperChest");
+  if (upperChest) {
+    state.currentYaw *= 0.96;
+    state.currentPitch *= 0.96;
+
+    // Return to base pose
+    const baseChestQuat = cursorBasePoses[character]?.["upperChest"];
+    if (baseChestQuat) {
+      const cursorEuler = new THREE.Euler(state.currentPitch, state.currentYaw, -state.currentYaw * 0.15);
+      const cursorQuat = new THREE.Quaternion().setFromEuler(cursorEuler);
+      upperChest.quaternion.copy(baseChestQuat).multiply(cursorQuat);
+    } else {
+      // Fallback if no base pose stored
+      const yawDelta = -state.currentYaw * 0.04;
+      const pitchDelta = -state.currentPitch * 0.04;
+      const deltaEuler = new THREE.Euler(pitchDelta, yawDelta, -yawDelta * 0.15);
+      const deltaQuat = new THREE.Quaternion().setFromEuler(deltaEuler);
+      upperChest.quaternion.multiply(deltaQuat);
+    }
+
+    if (Math.abs(state.currentYaw) > 0.001 || Math.abs(state.currentPitch) > 0.001) {
+      allReset = false;
+    }
   }
-  
-  // Reset neck
+
+  // Neck - return to base pose
   const neck = vrm.humanoid?.getNormalizedBoneNode("neck");
-  if (neck && state.neckBaseRotation) {
-    neck.quaternion.slerp(state.neckBaseRotation, 0.04);
-    if (neck.quaternion.angleTo(state.neckBaseRotation) > 0.001) allReset = false;
+  if (neck) {
+    state.neckCurrentYaw *= 0.96;
+    state.neckCurrentPitch *= 0.96;
+
+    // Return to base pose
+    const baseNeckQuat = cursorBasePoses[character]?.["neck"];
+    if (baseNeckQuat) {
+      const neckCursorEuler = new THREE.Euler(state.neckCurrentPitch, state.neckCurrentYaw, -state.neckCurrentYaw * 0.1);
+      const neckCursorQuat = new THREE.Quaternion().setFromEuler(neckCursorEuler);
+      neck.quaternion.copy(baseNeckQuat).multiply(neckCursorQuat);
+    } else {
+      // Fallback if no base pose stored
+      const neckYawDelta = -state.neckCurrentYaw * 0.04;
+      const neckPitchDelta = -state.neckCurrentPitch * 0.04;
+      const neckDeltaEuler = new THREE.Euler(neckPitchDelta, neckYawDelta, -neckYawDelta * 0.1);
+      const neckDeltaQuat = new THREE.Quaternion().setFromEuler(neckDeltaEuler);
+      neck.quaternion.multiply(neckDeltaQuat);
+    }
+
+    if (Math.abs(state.neckCurrentYaw) > 0.001 || Math.abs(state.neckCurrentPitch) > 0.001) {
+      allReset = false;
+    }
   }
-   
-   if (allReset) {
+
+  if (allReset) {
     delete cursorTiltState[character];
+    // Clear base poses when fully reset
+    if (cursorBasePoses[character]) {
+      delete cursorBasePoses[character];
+    }
   }
 }
 
@@ -1445,26 +1325,28 @@ function animate() {
             const vrm = current_avatars[character]["vrm"];
             const mixer = current_avatars[character]["animation_mixer"];
             
+            // Set lookAt target before VRM update
             if (extension_settings.vrm.follow_camera) {
-              if (cursorTrackingEnabled && extension_settings.vrm.follow_cursor) {
-                // Use VRM's native lookAt for eyes, custom code for body/head
-                vrm.lookAt.target = cursorTarget;
-                applyCursorTiltAndShift(vrm, character);
-              } else {
-                vrm.lookAt.target = lookAtTarget;
-                resetCursorTilt(vrm, character);
-              }
+                if (cursorTrackingEnabled && extension_settings.vrm.follow_cursor) {
+                    vrm.lookAt.target = cursorTarget;
+                } else {
+                    vrm.lookAt.target = lookAtTarget;
+                }
             } else if (cursorTrackingEnabled && extension_settings.vrm.follow_cursor) {
-              // Use VRM's native lookAt for eyes, custom code for body/head
-              vrm.lookAt.target = cursorTarget;
-              applyCursorTiltAndShift(vrm, character);
+                vrm.lookAt.target = cursorTarget;
             } else {
-              vrm.lookAt.target = null;
-              resetCursorTilt(vrm, character);
+                vrm.lookAt.target = null;
             }
 
             vrm.update( deltaTime );
             mixer.update( deltaTime );
+            
+            // Apply cursor tracking AFTER mixer update so it adds on top of animations
+            if (cursorTrackingEnabled && extension_settings.vrm.follow_cursor) {
+                applyCursorTiltAndShift(vrm, character);
+            } else {
+                resetCursorTilt(vrm, character);
+            }
 
             // Update control box
             const objectContainer = current_avatars[character]["objectContainer"];
@@ -1475,16 +1357,16 @@ function animate() {
             current_avatars[character]["collider"].scale.copy(objectContainer.scale);
             current_avatars[character]["collider"].visible = extension_settings.vrm.show_grid;
 
-            // Update hitbox
-            for (const body_part in current_avatars[character]["hitboxes"]) {
-                const bone = vrm.humanoid?.getNormalizedBoneNode(HITBOXES[body_part]["bone"]);
-                if (bone !== null) {
-                    bone.getWorldPosition(current_avatars[character]["hitboxes"][body_part]["offsetContainer"].position);
-                    bone.getWorldQuaternion(current_avatars[character]["hitboxes"][body_part]["offsetContainer"].quaternion);
-                    current_avatars[character]["hitboxes"][body_part]["offsetContainer"].scale.copy(objectContainer.scale);
-                    current_avatars[character]["hitboxes"][body_part]["offsetContainer"].visible = extension_settings.vrm.show_grid;
-                }
-            }
+    // Update hitbox
+    for (const body_part in current_avatars[character]["hitboxes"]) {
+      const bone = vrm.humanoid?.getNormalizedBoneNode(HITBOXES[body_part]["bone"]);
+      if (bone !== null) {
+        bone.getWorldPosition(current_avatars[character]["hitboxes"][body_part]["offsetContainer"].position);
+        bone.getWorldQuaternion(current_avatars[character]["hitboxes"][body_part]["offsetContainer"].quaternion);
+        current_avatars[character]["hitboxes"][body_part]["offsetContainer"].scale.copy(objectContainer.scale);
+        current_avatars[character]["hitboxes"][body_part]["offsetContainer"].visible = extension_settings.vrm.show_grid;
+      }
+    }
         }
         // Show/hide helper grid
         gridHelper.visible = extension_settings.vrm.show_grid;
@@ -1663,11 +1545,34 @@ async function unloadModel(character) {
             delete naturalIdleTimers[character];
         }
 
-        if (activeNaturalMovements[character]) {
-            delete activeNaturalMovements[character];
-        }
+    if (activeNaturalMovements[character]) {
+        delete activeNaturalMovements[character];
+    }
+    
+  // Clear idle animation for this character
+  if (activeIdleAnimations[character]) {
+    if (activeIdleAnimations[character].isRunning && activeIdleAnimations[character].fadeOut) {
+      activeIdleAnimations[character].fadeOut(ANIMATION_FADE_TIME);
+    }
+    delete activeIdleAnimations[character];
+  }
 
-        delete current_avatars[character];
+  // Clear VRMA base poses for this character
+  if (vrmaBoneBasePoses[character]) {
+    delete vrmaBoneBasePoses[character];
+  }
+
+  // Clear idle completion time for this character
+  if (lastIdleCompletionTime[character]) {
+    delete lastIdleCompletionTime[character];
+  }
+
+  // Clear cursor base poses for this character
+  if (cursorBasePoses[character]) {
+    delete cursorBasePoses[character];
+  }
+
+  delete current_avatars[character];
 
         container.visible = false;
         collider.visible = false;
@@ -1863,22 +1768,22 @@ async function loadModel(model_path) { // Only cache the model if character=null
 }
 
 async function initModel(model) {
-    const object_container = model["objectContainer"];
-    const model_path = model["model_path"];
+  const object_container = model["objectContainer"];
+  const model_path = model["model_path"];
 
-    object_container.scale.x = extension_settings.vrm.model_settings[model_path]['scale'];
-    object_container.scale.y = extension_settings.vrm.model_settings[model_path]['scale'];
-    object_container.scale.z = extension_settings.vrm.model_settings[model_path]['scale'];
+  object_container.scale.x = extension_settings.vrm.model_settings[model_path]['scale'];
+  object_container.scale.y = extension_settings.vrm.model_settings[model_path]['scale'];
+  object_container.scale.z = extension_settings.vrm.model_settings[model_path]['scale'];
 
-    object_container.position.x = extension_settings.vrm.model_settings[model_path]['x'];
-    object_container.position.y = extension_settings.vrm.model_settings[model_path]['y'];
-    object_container.position.z = 0.0;
+  object_container.position.x = extension_settings.vrm.model_settings[model_path]['x'];
+  object_container.position.y = extension_settings.vrm.model_settings[model_path]['y'];
+  object_container.position.z = 0.0;
 
-    object_container.rotation.x = extension_settings.vrm.model_settings[model_path]['rx'];
-    object_container.rotation.y = extension_settings.vrm.model_settings[model_path]['ry'];
-    object_container.rotation.z = 0.0;
+  object_container.rotation.x = extension_settings.vrm.model_settings[model_path]['rx'];
+  object_container.rotation.y = extension_settings.vrm.model_settings[model_path]['ry'];
+  object_container.rotation.z = 0.0;
 
-    // Cache model animations
+  // Cache model animations
     if (extension_settings.vrm.animations_cache && animations_cache[model_path] === undefined) {
         animations_cache[model_path] = {};
         const animation_names = [extension_settings.vrm.model_settings[model_path]['animation_default']['motion']]
@@ -2044,38 +1949,51 @@ async function setMotion(character, motion_file_path, loop=false, force=false, r
         console.debug(DEBUG_PREFIX,"Picked a random animation among",same_motion,":",motion_file_path);
     }
 
-    // new animation
-    if (current_motion_name != motion_file_path || loop || force) {
+  // new animation
+  if (current_motion_name != motion_file_path || loop || force) {
+    // Clear any natural idle timer to prevent it from interrupting the new animation
+    if (naturalIdleTimers[character]) {
+      clearTimeout(naturalIdleTimers[character]);
+      delete naturalIdleTimers[character];
+      console.debug(DEBUG_PREFIX,"Cleared natural idle timer for hitbox animation");
+    }
+    
+    // Also fade out any current idle animation
+    if (activeIdleAnimations[character]) {
+      activeIdleAnimations[character].fadeOut(ANIMATION_FADE_TIME);
+      delete activeIdleAnimations[character];
+      console.debug(DEBUG_PREFIX,"Faded out idle animation for hitbox animation");
+    }
 
-        if (animations_cache[model_path] !== undefined && animations_cache[model_path][motion_file_path] !== undefined) {
-            clip = animations_cache[model_path][motion_file_path];
-        }
-        else {
-            clip = await loadAnimation(vrm, hipsHeight, motion_file_path);
+    if (animations_cache[model_path] !== undefined && animations_cache[model_path][motion_file_path] !== undefined) {
+      clip = animations_cache[model_path][motion_file_path];
+    }
+    else {
+      clip = await loadAnimation(vrm, hipsHeight, motion_file_path);
 
-            if (clip === null) {
-                return;
-            }
+      if (clip === null) {
+        return;
+      }
 
-            if (extension_settings.vrm.animations_cache)
-                animations_cache[model_path][motion_file_path] = clip;
-        }
+      if (extension_settings.vrm.animations_cache)
+        animations_cache[model_path][motion_file_path] = clip;
+    }
 
-        // Guard: loadAnimation should return an AnimationClip, but be defensive
-        if (!clip || typeof clip.duration !== 'number') {
-            console.debug(DEBUG_PREFIX,"WARNING loadAnimation did not return a valid AnimationClip for",motion_file_path,clip);
-            return;
-        }
+    // Guard: loadAnimation should return an AnimationClip, but be defensive
+    if (!clip || typeof clip.duration !== 'number') {
+      console.debug(DEBUG_PREFIX,"WARNING loadAnimation did not return a valid AnimationClip for",motion_file_path,clip);
+      return;
+    }
 
-        // create AnimationAction for VRM
-        const new_motion_animation = mixer.clipAction( clip );
+    // create AnimationAction for VRM
+    const new_motion_animation = mixer.clipAction( clip );
 
-        // Fade out current animation
-        if ( current_motion_animation !== null ) {
-            current_motion_animation.fadeOut( ANIMATION_FADE_TIME );
-            current_motion_animation.terminated = true;
-            console.debug(DEBUG_PREFIX,"Fade out previous animation");
-        }
+    // Fade out current animation
+    if ( current_motion_animation !== null ) {
+      current_motion_animation.fadeOut( ANIMATION_FADE_TIME );
+      current_motion_animation.terminated = true;
+      console.debug(DEBUG_PREFIX,"Fade out previous animation");
+    }
 
         // Fade in new animation
         new_motion_animation
@@ -2472,47 +2390,305 @@ async function updateExpression(chat_id) {
 }
 
 
-function naturalIdleMovement(character, modelId) {
-    if (current_avatars[character] === undefined || current_avatars[character]["id"] != modelId) {
-        delete naturalIdleTimers[character];
-        return;
-    }
+// Scan for VRMA idle animation files
+async function scanVRMAIdleFiles() {
+  if (vrmaIdleFiles.length > 0) return; // Already scanned
 
-    const vrm = current_avatars[character]["vrm"];
-    const motionName = current_avatars[character]["motion"]["name"];
-    const model_path = extension_settings.vrm.character_model_mapping[character];
-    const defaultMotion = extension_settings.vrm.model_settings[model_path]["animation_default"]["motion"];
+  // Try to discover VRMA files in the extension directory
+  // In SillyTavern, extensions are served from /scripts/extensions/[type]/[name]/
+  const possibleFiles = [
+    'FanningSelfOff_Idle.vrma',
+    'FullBodyStretch_Idle.vrma',
+    'Impatient_Idle.vrma',
+    'InspectHands_Idle.vrma',
+    'KickingGround_Idle.vrma',
+    'LookBehind_Idle.vrma',
+    'Sigh_Idle.vrma',
+    'Yawn_Stretch_Idle.vrma'
+  ];
 
-    const motionNameBase = motionName?.replace(/\.[^/.]+$/, "").replace(/\d+$/, "");
-    const defaultMotionBase = defaultMotion?.replace(/\.[^/.]+$/, "").replace(/\d+$/, "");
+  // Build full paths - Extension-VRM folder is at /scripts/extensions/third-party/Extension-VRM/
+  const basePath = '/scripts/extensions/third-party/Extension-VRM/';
 
-    const isIdle = IDLE_ANIMS.some(idle => {
-        return motionNameBase === idle;
-    }) || (motionName === "none") || (motionNameBase === defaultMotionBase);
+  for (const file of possibleFiles) {
+    vrmaIdleFiles.push(`${basePath}${file}`);
+  }
 
-    if (!isIdle || !extension_settings.vrm.natural_idle) {
-        const delayTime = Math.floor(Math.random() * 20000) + 10000;
-        naturalIdleTimers[character] = setTimeout(() => {
-            naturalIdleMovement(character, modelId);
-        }, delayTime);
-        if (proceduralState[character]) delete proceduralState[character];
-        return;
-    }
+  console.debug(DEBUG_PREFIX, "Found VRMA idle files:", vrmaIdleFiles);
+}
 
-    const movementKeys = Object.keys(NATURAL_MOVEMENTS);
-    const selectedKey = movementKeys[Math.floor(Math.random() * movementKeys.length)];
-    const movement = NATURAL_MOVEMENTS[selectedKey];
+// Load a VRMA idle animation
+async function loadVRMAIdleAnimation(vrm, hipsHeight, vrmaPath) {
+  if (vrmaIdleCache[vrmaPath]) {
+    return vrmaIdleCache[vrmaPath];
+  }
+  
+  const vrmaLoader = new VRMALoader();
+  const result = await vrmaLoader.loadAsync(vrmaPath, vrm);
+  
+  if (result && result.clip) {
+    vrmaIdleCache[vrmaPath] = result.clip;
+    return result.clip;
+  }
+  
+  return null;
+}
 
-    console.debug(DEBUG_PREFIX, "Natural idle movement:", selectedKey, "-", movement?.description || "unknown", "for", character);
+async function naturalIdleMovement(character, modelId) {
+  console.debug(DEBUG_PREFIX, "naturalIdleMovement called for", character, "modelId:", modelId);
+  
+  if (current_avatars[character] === undefined || current_avatars[character]["id"] != modelId) {
+    console.debug(DEBUG_PREFIX, "naturalIdleMovement - character not found or wrong model ID, returning");
+    delete naturalIdleTimers[character];
+    return;
+  }
 
-    if (movement && typeof movement.action === 'function') {
-        movement.action(vrm, character, modelId);
-    }
+  const vrm = current_avatars[character]["vrm"];
+  const motionName = current_avatars[character]["motion"]["name"];
+  const model_path = extension_settings.vrm.character_model_mapping[character];
+  const defaultMotion = extension_settings.vrm.model_settings[model_path]["animation_default"]["motion"];
+  let mixer = current_avatars[character]["animation_mixer"];
 
-    const nextDelay = Math.floor(Math.random() * 20000) + 10000;
+  const motionNameBase = motionName?.replace(/\.[^/.]+$/, "").replace(/\d+$/, "");
+  const defaultMotionBase = defaultMotion?.replace(/\.[^/.]+$/, "").replace(/\d+$/, "");
+
+  const isIdle = IDLE_ANIMS.some(idle => {
+    return motionNameBase === idle;
+  }) || (motionName === "none") || (motionNameBase === defaultMotionBase);
+
+  console.debug(DEBUG_PREFIX, "naturalIdleMovement - motionName:", motionName, "isIdle:", isIdle, "natural_idle enabled:", extension_settings.vrm.natural_idle);
+
+  if (!isIdle || !extension_settings.vrm.natural_idle) {
+    console.debug(DEBUG_PREFIX, "naturalIdleMovement - not idle mode or natural_idle disabled, rescheduling");
+    const delayTime = Math.floor(Math.random() * 20000) + 10000;
     naturalIdleTimers[character] = setTimeout(() => {
+      naturalIdleMovement(character, modelId);
+    }, delayTime);
+    if (proceduralState[character]) delete proceduralState[character];
+    return;
+  }
+
+  // Check cooldown - must wait 7-21 seconds after last idle animation completed
+  const now = Date.now();
+  const lastCompletion = lastIdleCompletionTime[character] || 0;
+  const cooldownDuration = Math.floor(Math.random() * 14000) + 7000; // 7-21 seconds
+  const timeSinceLastCompletion = now - lastCompletion;
+  
+  if (timeSinceLastCompletion < cooldownDuration) {
+    const remainingCooldown = cooldownDuration - timeSinceLastCompletion;
+    console.debug(DEBUG_PREFIX, "Natural idle on cooldown for", character, "- waiting", remainingCooldown, "ms");
+    naturalIdleTimers[character] = setTimeout(() => {
+      naturalIdleMovement(character, modelId);
+    }, remainingCooldown);
+    return;
+  }
+
+  // Ensure mixer exists
+  if (!mixer || typeof mixer.clipAction !== 'function') {
+    mixer = new THREE.AnimationMixer(vrm.scene);
+    current_avatars[character]["animation_mixer"] = mixer;
+  }
+
+  // Scan for VRMA files on first run
+  await scanVRMAIdleFiles();
+
+  // Randomly choose between VRMA file (30% chance) and procedural animation (70% chance)
+  const useVRMA = vrmaIdleFiles.length > 0 && Math.random() < 0.3;
+  
+  let clip = null;
+  let clipDuration = 0;
+  let isVRMA = false;
+  let vrmaFileName = '';
+  let movementConfig = null;
+  let randomizedRotation = 0;
+  
+  if (useVRMA) {
+    // Select random VRMA file
+    const selectedVRMA = vrmaIdleFiles[Math.floor(Math.random() * vrmaIdleFiles.length)];
+    const hipsHeight = current_avatars[character]["hipsHeight"];
+    
+    console.debug(DEBUG_PREFIX, "Loading VRMA idle animation:", selectedVRMA, "for", character);
+    
+    try {
+      clip = await loadVRMAIdleAnimation(vrm, hipsHeight, selectedVRMA);
+      if (clip) {
+        clipDuration = clip.duration;
+        isVRMA = true;
+        vrmaFileName = selectedVRMA.split('/').pop();
+        console.debug(DEBUG_PREFIX, "Loaded VRMA idle animation:", selectedVRMA, "duration:", clipDuration);
+      }
+    } catch (error) {
+      console.warn(DEBUG_PREFIX, "Failed to load VRMA idle animation:", selectedVRMA, error);
+    }
+  }
+  
+  // Fall back to procedural animation if VRMA failed or wasn't selected
+  if (!clip) {
+    // Select random procedural movement
+    const movementKeys = Object.keys(IDLE_MOVEMENT_CONFIGS);
+    const selectedKey = movementKeys[Math.floor(Math.random() * movementKeys.length)];
+    movementConfig = IDLE_MOVEMENT_CONFIGS[selectedKey];
+
+    console.debug(DEBUG_PREFIX, "Natural idle animation:", selectedKey, "-", movementConfig?.description || "unknown", "for", character);
+
+    // Generate animation clip for this character
+    const result = getIdleAnimationClip(character, vrm, selectedKey);
+    clip = result.clip;
+    randomizedRotation = result.randomizedRotation;
+    
+    if (!clip) {
+      console.warn(DEBUG_PREFIX, "Failed to generate idle animation clip:", selectedKey);
+      const nextDelay = Math.floor(Math.random() * 20000) + 10000;
+      naturalIdleTimers[character] = setTimeout(() => {
         naturalIdleMovement(character, modelId);
-    }, nextDelay);
+      }, nextDelay);
+      return;
+    }
+    
+    clipDuration = clip.duration;
+  }
+
+  // Fade out previous idle animation if exists
+  const prevIdleAction = activeIdleAnimations[character];
+  if (prevIdleAction && prevIdleAction.isRunning && prevIdleAction.isRunning()) {
+    prevIdleAction.fadeOut(ANIMATION_FADE_TIME);
+    console.debug(DEBUG_PREFIX, "Fade out previous idle animation");
+  }
+
+  // For VRMA files, store base bone poses before playing
+  // This prevents accumulation of bone rotations over multiple VRMA plays
+  if (isVRMA) {
+    vrmaBoneBasePoses[character] = {};
+    const bonesToTrack = ['hips', 'spine', 'upperChest', 'chest', 'neck', 'head'];
+    for (const boneName of bonesToTrack) {
+      const bone = vrm.humanoid?.getNormalizedBoneNode(boneName);
+      if (bone) {
+        vrmaBoneBasePoses[character][boneName] = bone.quaternion.clone();
+      }
+    }
+  }
+
+  // Create and play new idle animation
+  const idleAction = mixer.clipAction(clip);
+  idleAction
+    .reset()
+    .setLoop(THREE.LoopOnce) // Don't loop - play once
+    .setEffectiveTimeScale(1)
+    .setEffectiveWeight(1)
+    .fadeIn(ANIMATION_FADE_TIME)
+    .play();
+
+  activeIdleAnimations[character] = idleAction;
+  
+  if (isVRMA) {
+    console.debug(DEBUG_PREFIX, "Playing VRMA idle animation:", vrmaFileName, "duration:", clipDuration, "for", character);
+  } else {
+    console.debug(DEBUG_PREFIX, "Playing procedural idle animation:", movementConfig?.description, "duration:", clipDuration, "for", character);
+  }
+
+  // Apply model rotation if configured (procedural only)
+  if (!isVRMA && movementConfig && movementConfig.applyModelRotation && randomizedRotation !== 0) {
+    const objectContainer = current_avatars[character]?.["objectContainer"];
+    if (objectContainer) {
+      const targetYaw = randomizedRotation;
+      const duration = movementConfig.duration || 10000;
+      applyModelRotation(vrm, character, modelId, targetYaw, duration);
+    }
+  }
+
+  // Apply expression if configured
+  if (!isVRMA && movementConfig && movementConfig.expressionChance && Math.random() < movementConfig.expressionChance) {
+    const expressions = movementConfig.expressions || ['happy'];
+    const randomExpression = expressions[Math.floor(Math.random() * expressions.length)];
+    const delay = Math.random() * 1000 + 500;
+    setTimeout(() => {
+      if (current_avatars[character]?.vrm === vrm) {
+        applyIdleExpression(vrm, character, randomExpression, 0.5, 2000);
+      }
+    }, delay);
+  }
+  
+  // VRMA files also get expressions (40% chance)
+  if (isVRMA && Math.random() < 0.4) {
+    const expressions = ['happy', 'relaxed', 'surprised'];
+    const randomExpression = expressions[Math.floor(Math.random() * expressions.length)];
+    const delay = Math.random() * 1000 + 500;
+    setTimeout(() => {
+      if (current_avatars[character]?.vrm === vrm) {
+        applyIdleExpression(vrm, character, randomExpression, 0.5, 2000);
+      }
+    }, delay);
+  }
+
+  // Schedule next idle animation after this one completes
+  const clipDurationMs = clipDuration * 1000;
+  const pauseAfter = Math.floor(Math.random() * 3000) + 2000; // 2-5 second pause (shorter for smoother flow)
+
+  // For VRMA files, use a longer fade-out and restore base poses
+  // to prevent bone rotation accumulation and snapping
+  const fadeOutDuration = isVRMA ? Math.min(1500, clipDurationMs * 0.25) : ANIMATION_FADE_TIME;
+
+  // Schedule fade-out - for VRMA start fading before end to blend smoothly
+  const fadeOutDelay = isVRMA ? Math.max(clipDurationMs - fadeOutDuration - 200, clipDurationMs * 0.75) : clipDurationMs + pauseAfter;
+
+  // First timeout: fade out the current animation
+  naturalIdleTimers[character] = setTimeout(() => {
+    const currentAction = activeIdleAnimations[character];
+    if (currentAction) {
+      // For VRMA, stop the action after fade to prevent bone pose lingering
+      if (isVRMA) {
+        currentAction.fadeOut(fadeOutDuration);
+        setTimeout(() => {
+          currentAction.stop();
+          // Restore base bone poses to prevent accumulation
+          if (vrmaBoneBasePoses[character]) {
+            for (const [boneName, baseQuat] of Object.entries(vrmaBoneBasePoses[character])) {
+              const bone = vrm.humanoid?.getNormalizedBoneNode(boneName);
+              if (bone) {
+                bone.quaternion.copy(baseQuat);
+              }
+            }
+            delete vrmaBoneBasePoses[character];
+            console.debug(DEBUG_PREFIX, "Restored base bone poses after VRMA animation");
+          }
+        }, fadeOutDuration + 100);
+        console.debug(DEBUG_PREFIX, "Fading out VRMA idle animation with pose restoration");
+      } else {
+        currentAction.fadeOut(fadeOutDuration);
+        console.debug(DEBUG_PREFIX, "Fade out idle animation before next");
+      }
+    }
+
+      // Record completion time and schedule next idle after cooldown
+      // The cooldown is enforced in naturalIdleMovement itself
+      const completionTime = Date.now();
+      lastIdleCompletionTime[character] = completionTime;
+      console.debug(DEBUG_PREFIX, "Idle animation completed for", character, "at", completionTime, "- starting cooldown");
+      
+      // Reset cursor base poses after idle animation completes
+      // This prevents cursor tracking from using stale base poses
+      if (cursorBasePoses[character]) {
+        const vrm = current_avatars[character]?.["vrm"];
+        if (vrm?.humanoid) {
+          const upperChest = vrm.humanoid.getNormalizedBoneNode("upperChest");
+          const neck = vrm.humanoid.getNormalizedBoneNode("neck");
+          if (upperChest) {
+            cursorBasePoses[character]["upperChest"] = upperChest.quaternion.clone();
+          }
+          if (neck) {
+            cursorBasePoses[character]["neck"] = neck.quaternion.clone();
+          }
+          console.debug(DEBUG_PREFIX, "Reset cursor base poses after idle animation for", character);
+        }
+      }
+      
+      // Schedule next idle after fade completes (add extra time for VRMA pose restoration)
+      const nextDelay = isVRMA ? fadeOutDuration + 200 + pauseAfter : 0;
+      setTimeout(() => {
+        naturalIdleMovement(character, modelId);
+      }, nextDelay);
+
+  }, fadeOutDelay);
 }
 
 // Blink

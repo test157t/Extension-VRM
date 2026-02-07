@@ -58,15 +58,17 @@ function rescale(object, scaleDelta) {
 }
 
 async function hitboxClick(character,hitbox) {
-    await delay(HIT_BOX_DELAY);
+  await delay(HIT_BOX_DELAY);
 
-    // Using control
-    if (isMouseDown)
-        return;
+  // Using control
+  if (isMouseDown) {
+    console.debug(DEBUG_PREFIX,"Hitbox click ignored - mouse still held (treated as drag)");
+    return;
+  }
 
-    // Was a simple click
-    const model_path = current_avatars[character]["model_path"]
-    console.debug(DEBUG_PREFIX,"Detected click on hitbox",character,hitbox,model_path,extension_settings.vrm.model_settings[model_path]['hitboxes_mapping']);
+  // Was a simple click
+  const model_path = current_avatars[character]["model_path"]
+  console.debug(DEBUG_PREFIX,"Detected click on hitbox",character,hitbox,model_path,extension_settings.vrm.model_settings[model_path]['hitboxes_mapping']);
 
     const model_expression = extension_settings.vrm.model_settings[model_path]['hitboxes_mapping'][hitbox]["expression"];
     const model_motion = extension_settings.vrm.model_settings[model_path]['hitboxes_mapping'][hitbox]["motion"];
